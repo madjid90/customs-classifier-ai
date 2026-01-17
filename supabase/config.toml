@@ -36,3 +36,6 @@ verify_jwt = false
 
 [functions.classify]
 verify_jwt = false
+
+[functions.cases]
+verify_jwt = false

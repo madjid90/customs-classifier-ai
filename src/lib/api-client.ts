@@ -72,13 +72,20 @@ export async function verifyOtp(phone: string, otp: string) {
   });
 }
 
-// Cases endpoints
+// Cases endpoints - call edge function directly
 export async function createCase(data: { 
   type_import_export: "import" | "export"; 
   origin_country: string; 
   product_name: string; 
 }) {
-  return api.post("/cases", data);
+  const token = localStorage.getItem("auth_token");
+  return axios.post(`${FUNCTIONS_URL}/cases`, data, {
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+      "Authorization": token ? `Bearer ${token}` : "",
+    },
+  });
 }
 
 export async function getCases(params?: {
@@ -90,15 +97,37 @@ export async function getCases(params?: {
   date_from?: string;
   date_to?: string;
 }) {
-  return api.get("/cases", { params });
+  const token = localStorage.getItem("auth_token");
+  return axios.get(`${FUNCTIONS_URL}/cases`, {
+    params,
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+      "Authorization": token ? `Bearer ${token}` : "",
+    },
+  });
 }
 
 export async function getCaseDetail(caseId: string) {
-  return api.get(`/cases/${caseId}`);
+  const token = localStorage.getItem("auth_token");
+  return axios.get(`${FUNCTIONS_URL}/cases/${caseId}`, {
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+      "Authorization": token ? `Bearer ${token}` : "",
+    },
+  });
 }
 
 export async function validateCase(caseId: string) {
-  return api.post(`/cases/${caseId}/validate`);
+  const token = localStorage.getItem("auth_token");
+  return axios.post(`${FUNCTIONS_URL}/cases/${caseId}/validate`, {}, {
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+      "Authorization": token ? `Bearer ${token}` : "",
+    },
+  });
 }
 
 // Files endpoints

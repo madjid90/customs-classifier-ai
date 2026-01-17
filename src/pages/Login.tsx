@@ -4,100 +4,115 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/AuthContext";
-import { sendOtp, verifyOtp } from "@/lib/api-client";
-import { Loader2, Phone, Shield } from "lucide-react";
+import { Loader2, Shield, Mail, Lock, Phone, Building2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { z } from "zod";
 
-type Step = "phone" | "otp";
+const loginSchema = z.object({
+  email: z.string().email("Email invalide"),
+  password: z.string().min(6, "Le mot de passe doit contenir au moins 6 caracteres"),
+});
 
-function formatPhoneToE164(phone: string): string {
-  const cleaned = phone.replace(/\s+/g, "").replace(/^0/, "");
-  if (cleaned.startsWith("+")) return cleaned;
-  if (cleaned.startsWith("212")) return `+${cleaned}`;
-  return `+212${cleaned}`;
-}
+const signupSchema = z.object({
+  email: z.string().email("Email invalide"),
+  password: z.string().min(6, "Le mot de passe doit contenir au moins 6 caracteres"),
+  phone: z.string().min(10, "Numero de telephone invalide"),
+  companyName: z.string().min(2, "Nom de societe requis"),
+});
 
 export default function LoginPage() {
-  const [step, setStep] = useState<Step>("phone");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
-  const [otp, setOtp] = useState("");
+  const [companyName, setCompanyName] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [expiresIn, setExpiresIn] = useState(0);
+  const [activeTab, setActiveTab] = useState("login");
   
-  const { login } = useAuth();
+  const { login, signup, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const handleSendOtp = async (e: React.FormEvent) => {
+  // Redirect if already authenticated
+  if (isAuthenticated) {
+    navigate("/dashboard", { replace: true });
+    return null;
+  }
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!phone.trim()) return;
+    
+    const result = loginSchema.safeParse({ email, password });
+    if (!result.success) {
+      toast({
+        title: "Erreur de validation",
+        description: result.error.errors[0].message,
+        variant: "destructive",
+      });
+      return;
+    }
 
     setIsLoading(true);
     try {
-      const formattedPhone = formatPhoneToE164(phone);
-      const response = await sendOtp(formattedPhone);
-      setExpiresIn(response.data.expires_in);
-      setPhone(formattedPhone);
-      setStep("otp");
-      toast({
-        title: "Code envoye",
-        description: "Verifiez votre telephone pour le code de verification.",
-      });
-    } catch (error) {
-      toast({
-        title: "Erreur",
-        description: error instanceof Error ? error.message : "Impossible d'envoyer le code.",
-        variant: "destructive",
-      });
+      const { error } = await login(email, password);
+      if (error) {
+        let message = "Erreur de connexion";
+        if (error.message.includes("Invalid login credentials")) {
+          message = "Email ou mot de passe incorrect";
+        } else if (error.message.includes("Email not confirmed")) {
+          message = "Veuillez confirmer votre email avant de vous connecter";
+        }
+        toast({
+          title: "Erreur",
+          description: message,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Connexion reussie",
+          description: "Bienvenue sur la plateforme de classification douaniere.",
+        });
+        navigate("/dashboard");
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleVerifyOtp = async (e: React.FormEvent) => {
+  const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (otp.length !== 6) return;
-
-    setIsLoading(true);
-    try {
-      const response = await verifyOtp(phone, otp);
-      const { token, expires_at, user } = response.data;
-      login(token, user, expires_at);
+    
+    const result = signupSchema.safeParse({ email, password, phone, companyName });
+    if (!result.success) {
       toast({
-        title: "Connexion reussie",
-        description: "Bienvenue sur la plateforme de classification douaniere.",
-      });
-      navigate("/dashboard");
-    } catch (error) {
-      toast({
-        title: "Erreur",
-        description: error instanceof Error ? error.message : "Code invalide ou expire.",
+        title: "Erreur de validation",
+        description: result.error.errors[0].message,
         variant: "destructive",
       });
-      setOtp("");
-    } finally {
-      setIsLoading(false);
+      return;
     }
-  };
 
-  const handleResendOtp = async () => {
     setIsLoading(true);
     try {
-      const response = await sendOtp(phone);
-      setExpiresIn(response.data.expires_in);
-      setOtp("");
-      toast({
-        title: "Code renvoye",
-        description: "Un nouveau code a ete envoye a votre telephone.",
-      });
-    } catch (error) {
-      toast({
-        title: "Erreur",
-        description: error instanceof Error ? error.message : "Impossible de renvoyer le code.",
-        variant: "destructive",
-      });
+      const { error } = await signup(email, password, phone, companyName);
+      if (error) {
+        let message = error.message;
+        if (error.message.includes("already registered")) {
+          message = "Cet email est deja utilise";
+        }
+        toast({
+          title: "Erreur",
+          description: message,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Compte cree",
+          description: "Votre compte a ete cree avec succes.",
+        });
+        navigate("/dashboard");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -112,107 +127,144 @@ export default function LoginPage() {
           </div>
           <CardTitle className="text-xl">Classification Douaniere</CardTitle>
           <CardDescription>
-            {step === "phone" 
-              ? "Entrez votre numero de telephone pour vous connecter" 
-              : "Entrez le code de verification recu par SMS"}
+            Plateforme de classification HS pour le Maroc
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {step === "phone" ? (
-            <form onSubmit={handleSendOtp} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="phone">Numero de telephone</Label>
-                <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="phone"
-                    type="tel"
-                    placeholder="06 XX XX XX XX"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    className="pl-10"
-                    disabled={isLoading}
-                    autoComplete="tel"
-                  />
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="login">Connexion</TabsTrigger>
+              <TabsTrigger value="signup">Inscription</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="login">
+              <form onSubmit={handleLogin} className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="login-email">Email</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="login-email"
+                      type="email"
+                      placeholder="votre@email.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="pl-10"
+                      disabled={isLoading}
+                      autoComplete="email"
+                    />
+                  </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Format: 06XXXXXXXX ou +212XXXXXXXXX
-                </p>
-              </div>
-              <Button type="submit" className="w-full" disabled={isLoading || !phone.trim()}>
-                {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Envoi en cours...
-                  </>
-                ) : (
-                  "Envoyer le code"
-                )}
-              </Button>
-            </form>
-          ) : (
-            <form onSubmit={handleVerifyOtp} className="space-y-4">
-              <div className="space-y-2">
-                <Label>Code de verification</Label>
-                <div className="flex justify-center">
-                  <InputOTP
-                    maxLength={6}
-                    value={otp}
-                    onChange={setOtp}
-                    disabled={isLoading}
-                  >
-                    <InputOTPGroup>
-                      <InputOTPSlot index={0} />
-                      <InputOTPSlot index={1} />
-                      <InputOTPSlot index={2} />
-                      <InputOTPSlot index={3} />
-                      <InputOTPSlot index={4} />
-                      <InputOTPSlot index={5} />
-                    </InputOTPGroup>
-                  </InputOTP>
+                <div className="space-y-2">
+                  <Label htmlFor="login-password">Mot de passe</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="login-password"
+                      type="password"
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="pl-10"
+                      disabled={isLoading}
+                      autoComplete="current-password"
+                    />
+                  </div>
                 </div>
-                <p className="text-center text-xs text-muted-foreground">
-                  Code envoye au {phone}
-                  {expiresIn > 0 && ` (expire dans ${Math.floor(expiresIn / 60)}min)`}
-                </p>
-              </div>
-              <Button type="submit" className="w-full" disabled={isLoading || otp.length !== 6}>
-                {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Verification...
-                  </>
-                ) : (
-                  "Se connecter"
-                )}
-              </Button>
-              <div className="flex items-center justify-between text-sm">
-                <Button
-                  type="button"
-                  variant="link"
-                  size="sm"
-                  onClick={() => {
-                    setStep("phone");
-                    setOtp("");
-                  }}
-                  disabled={isLoading}
-                  className="px-0"
-                >
-                  Modifier le numero
+                <Button type="submit" className="w-full" disabled={isLoading}>
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Connexion...
+                    </>
+                  ) : (
+                    "Se connecter"
+                  )}
                 </Button>
-                <Button
-                  type="button"
-                  variant="link"
-                  size="sm"
-                  onClick={handleResendOtp}
-                  disabled={isLoading}
-                  className="px-0"
-                >
-                  Renvoyer le code
+              </form>
+            </TabsContent>
+
+            <TabsContent value="signup">
+              <form onSubmit={handleSignup} className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="signup-company">Nom de la societe</Label>
+                  <div className="relative">
+                    <Building2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="signup-company"
+                      type="text"
+                      placeholder="Ma Societe SARL"
+                      value={companyName}
+                      onChange={(e) => setCompanyName(e.target.value)}
+                      className="pl-10"
+                      disabled={isLoading}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="signup-phone">Telephone</Label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="signup-phone"
+                      type="tel"
+                      placeholder="+212 6XX XX XX XX"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      className="pl-10"
+                      disabled={isLoading}
+                      autoComplete="tel"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="signup-email">Email</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="signup-email"
+                      type="email"
+                      placeholder="votre@email.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="pl-10"
+                      disabled={isLoading}
+                      autoComplete="email"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="signup-password">Mot de passe</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="signup-password"
+                      type="password"
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="pl-10"
+                      disabled={isLoading}
+                      autoComplete="new-password"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Minimum 6 caracteres
+                  </p>
+                </div>
+                <Button type="submit" className="w-full" disabled={isLoading}>
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Inscription...
+                    </>
+                  ) : (
+                    "Creer un compte"
+                  )}
                 </Button>
-              </div>
-            </form>
-          )}
+              </form>
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
     </div>

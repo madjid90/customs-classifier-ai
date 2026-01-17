@@ -39,3 +39,6 @@ verify_jwt = false
 
 [functions.cases]
 verify_jwt = false
+
+[functions.files-presign]
+verify_jwt = false

@@ -130,14 +130,21 @@ export async function validateCase(caseId: string) {
   });
 }
 
-// Files endpoints
+// Files endpoints - call edge function directly
 export async function presignFile(data: {
   case_id: string | null;
   file_type: string;
   filename: string;
   content_type: string;
 }) {
-  return api.post("/files/presign", data);
+  const token = localStorage.getItem("auth_token");
+  return axios.post(`${FUNCTIONS_URL}/files-presign`, data, {
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+      "Authorization": token ? `Bearer ${token}` : "",
+    },
+  });
 }
 
 export async function attachFile(caseId: string, data: {

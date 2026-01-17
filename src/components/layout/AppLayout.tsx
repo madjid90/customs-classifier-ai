@@ -4,10 +4,12 @@ import { useAuth } from "@/contexts/AuthContext";
 import { AppHeader } from "./AppHeader";
 import { Loader2 } from "lucide-react";
 
+type UserRole = "admin" | "agent" | "manager";
+
 interface AppLayoutProps {
   children: ReactNode;
   requireAuth?: boolean;
-  allowedRoles?: string[];
+  allowedRoles?: UserRole[];
 }
 
 export function AppLayout({ 

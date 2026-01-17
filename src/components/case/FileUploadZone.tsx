@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { CaseFileType, FILE_TYPE_LABELS, CaseFile } from "@/lib/types";
-import { uploadAndAttachFile } from "@/lib/api-client";
+import { uploadFile } from "@/lib/api";
 import { 
   Upload, 
   X, 
@@ -78,10 +78,10 @@ export function FileUploadZone({ caseId, existingFiles, onFileUploaded }: FileUp
     });
   }, [selectedFileType, caseId]);
 
-  const handleUpload = async (uploadFile: UploadingFile) => {
+  const handleUpload = async (uploadingFile: UploadingFile) => {
     setUploadingFiles((prev) =>
       prev.map((f) =>
-        f.id === uploadFile.id ? { ...f, status: "uploading", progress: 10 } : f
+        f.id === uploadingFile.id ? { ...f, status: "uploading", progress: 10 } : f
       )
     );
 
@@ -90,42 +90,34 @@ export function FileUploadZone({ caseId, existingFiles, onFileUploaded }: FileUp
       const progressInterval = setInterval(() => {
         setUploadingFiles((prev) =>
           prev.map((f) =>
-            f.id === uploadFile.id && f.progress < 90
+            f.id === uploadingFile.id && f.progress < 90
               ? { ...f, progress: f.progress + 10 }
               : f
           )
         );
       }, 200);
 
-      const result = await uploadAndAttachFile(caseId, uploadFile.file, uploadFile.fileType);
+      const result = await uploadFile(caseId, uploadingFile.file, uploadingFile.fileType);
 
       clearInterval(progressInterval);
 
       setUploadingFiles((prev) =>
         prev.map((f) =>
-          f.id === uploadFile.id ? { ...f, status: "success", progress: 100 } : f
+          f.id === uploadingFile.id ? { ...f, status: "success", progress: 100 } : f
         )
       );
 
       // Notify parent
-      onFileUploaded({
-        id: result.attach_id,
-        case_id: caseId,
-        file_type: uploadFile.fileType,
-        file_url: result.file_url,
-        filename: uploadFile.file.name,
-        size_bytes: uploadFile.file.size,
-        created_at: new Date().toISOString(),
-      });
+      onFileUploaded(result as unknown as CaseFile);
 
       // Remove from uploading list after a delay
       setTimeout(() => {
-        setUploadingFiles((prev) => prev.filter((f) => f.id !== uploadFile.id));
+        setUploadingFiles((prev) => prev.filter((f) => f.id !== uploadingFile.id));
       }, 2000);
     } catch (error) {
       setUploadingFiles((prev) =>
         prev.map((f) =>
-          f.id === uploadFile.id
+          f.id === uploadingFile.id
             ? { ...f, status: "error", error: error instanceof Error ? error.message : "Erreur" }
             : f
         )

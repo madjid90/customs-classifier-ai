@@ -1,0 +1,360 @@
+import { useEffect, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { AppLayout } from "@/components/layout/AppLayout";
+import { Breadcrumbs } from "@/components/layout/Breadcrumbs";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatusBadge, ConfidenceBadge } from "@/components/ui/status-badge";
+import { getCaseDetail, validateCase, exportPdf } from "@/lib/api-client";
+import { CaseDetailResponse, EvidenceItem, Alternative, INGESTION_SOURCE_LABELS } from "@/lib/types";
+import { useAuth } from "@/contexts/AuthContext";
+import { 
+  Loader2, 
+  Copy, 
+  Download, 
+  CheckCircle, 
+  AlertTriangle,
+  FileText,
+  Package,
+  ExternalLink
+} from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { format } from "date-fns";
+import { fr } from "date-fns/locale";
+
+export default function ResultPage() {
+  const { caseId } = useParams<{ caseId: string }>();
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const { hasRole } = useAuth();
+
+  const [caseData, setCaseData] = useState<CaseDetailResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isValidating, setIsValidating] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+
+  useEffect(() => {
+    async function fetchCase() {
+      if (!caseId) return;
+      try {
+        const response = await getCaseDetail(caseId);
+        setCaseData(response.data);
+        
+        // If no result or no evidence, redirect back
+        if (!response.data.last_result || 
+            (response.data.last_result.evidence?.length === 0 && 
+             response.data.last_result.status !== "ERROR")) {
+          navigate(`/cases/${caseId}/analyze`);
+        }
+      } catch (err) {
+        toast({
+          title: "Erreur",
+          description: err instanceof Error ? err.message : "Erreur de chargement",
+          variant: "destructive",
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    fetchCase();
+  }, [caseId, navigate, toast]);
+
+  const handleCopyCode = () => {
+    if (caseData?.last_result?.recommended_code) {
+      navigator.clipboard.writeText(caseData.last_result.recommended_code);
+      toast({
+        title: "Code copie",
+        description: "Le code SH a ete copie dans le presse-papiers.",
+      });
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (!caseId) return;
+    setIsExporting(true);
+    try {
+      const response = await exportPdf(caseId);
+      window.open(response.data.download_url, "_blank");
+      toast({
+        title: "Export reussi",
+        description: "Le PDF a ete genere avec succes.",
+      });
+    } catch (err) {
+      toast({
+        title: "Erreur",
+        description: err instanceof Error ? err.message : "Impossible d'exporter le PDF.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleValidate = async () => {
+    if (!caseId) return;
+    setIsValidating(true);
+    try {
+      await validateCase(caseId);
+      toast({
+        title: "Dossier valide",
+        description: "Le resultat a ete valide avec succes.",
+      });
+      // Refresh data
+      const response = await getCaseDetail(caseId);
+      setCaseData(response.data);
+    } catch (err) {
+      toast({
+        title: "Erreur",
+        description: err instanceof Error ? err.message : "Impossible de valider.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  const formatHSCode = (code: string) => {
+    // Format: XXXX.XX.XX.XX
+    const cleaned = code.replace(/\D/g, "");
+    if (cleaned.length <= 4) return cleaned;
+    if (cleaned.length <= 6) return `${cleaned.slice(0, 4)}.${cleaned.slice(4)}`;
+    if (cleaned.length <= 8) return `${cleaned.slice(0, 4)}.${cleaned.slice(4, 6)}.${cleaned.slice(6)}`;
+    return `${cleaned.slice(0, 4)}.${cleaned.slice(4, 6)}.${cleaned.slice(6, 8)}.${cleaned.slice(8)}`;
+  };
+
+  if (isLoading) {
+    return (
+      <AppLayout>
+        <div className="flex min-h-[50vh] items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (!caseData || !caseData.last_result) {
+    return (
+      <AppLayout>
+        <div className="container py-8">
+          <div className="flex flex-col items-center justify-center py-12">
+            <AlertTriangle className="h-12 w-12 text-warning" />
+            <p className="mt-4 text-lg font-medium">Resultat non disponible</p>
+            <Button variant="link" onClick={() => navigate(`/cases/${caseId}/analyze`)}>
+              Retour a l'analyse
+            </Button>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  const result = caseData.last_result;
+  const canValidate = hasRole(["admin", "manager"]) && caseData.case.status === "RESULT_READY";
+
+  return (
+    <AppLayout>
+      <div className="container py-8">
+        <Breadcrumbs
+          items={[
+            { label: "Dossiers", href: "/history" },
+            { label: caseData.case.product_name.slice(0, 30) + (caseData.case.product_name.length > 30 ? "..." : "") },
+          ]}
+        />
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-3">
+          {/* Main Result */}
+          <div className="space-y-6 lg:col-span-2">
+            {/* HS Code Result */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <Package className="h-6 w-6 text-accent" />
+                    <div>
+                      <CardTitle className="text-lg">{caseData.case.product_name}</CardTitle>
+                      <CardDescription>
+                        {caseData.case.type_import_export === "import" ? "Import" : "Export"} - {caseData.case.origin_country}
+                      </CardDescription>
+                    </div>
+                  </div>
+                  <StatusBadge status={caseData.case.status} />
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {/* Main Code */}
+                {result.recommended_code && (
+                  <div className="rounded-lg border bg-muted/30 p-6 text-center">
+                    <p className="text-sm text-muted-foreground mb-2">Code SH / Nomenclature Maroc</p>
+                    <p className="hs-code text-3xl text-primary">
+                      {formatHSCode(result.recommended_code)}
+                    </p>
+                    <div className="mt-3 flex items-center justify-center gap-2">
+                      <ConfidenceBadge level={result.confidence_level} percentage={result.confidence} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Low Confidence Warning */}
+                {result.status === "LOW_CONFIDENCE" && (
+                  <div className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/5 p-4">
+                    <AlertTriangle className="h-5 w-5 text-warning mt-0.5" />
+                    <div>
+                      <p className="font-medium text-warning">Confiance faible</p>
+                      <p className="text-sm text-muted-foreground">
+                        Ce resultat necessite une verification manuelle. Ajoutez des documents supplementaires pour ameliorer la precision.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Justification */}
+                {result.justification_short && (
+                  <div>
+                    <h3 className="font-medium mb-2">Justification</h3>
+                    <p className="text-sm text-muted-foreground">{result.justification_short}</p>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={handleCopyCode}>
+                    <Copy className="mr-2 h-4 w-4" />
+                    Copier le code
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleExportPdf} disabled={isExporting}>
+                    {isExporting ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Download className="mr-2 h-4 w-4" />
+                    )}
+                    Telecharger PDF
+                  </Button>
+                  {canValidate && (
+                    <Button size="sm" onClick={handleValidate} disabled={isValidating}>
+                      {isValidating ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <CheckCircle className="mr-2 h-4 w-4" />
+                      )}
+                      Valider
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Alternatives */}
+            {result.alternatives && result.alternatives.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Codes alternatifs</CardTitle>
+                  <CardDescription>
+                    Autres classifications possibles
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {result.alternatives.map((alt: Alternative, index: number) => (
+                      <div key={index} className="flex items-center justify-between rounded-lg border p-3">
+                        <div>
+                          <p className="font-mono font-medium">{formatHSCode(alt.code)}</p>
+                          <p className="text-sm text-muted-foreground">{alt.reason}</p>
+                        </div>
+                        <span className="text-sm text-muted-foreground font-mono">
+                          {Math.round(alt.confidence * 100)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Evidence */}
+            {result.evidence && result.evidence.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Preuves et sources</CardTitle>
+                  <CardDescription>
+                    Documents justifiant la classification
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {result.evidence.map((ev: EvidenceItem, index: number) => (
+                      <div key={index} className="rounded-lg border p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <FileText className="h-4 w-4 text-accent" />
+                          <span className="text-sm font-medium">
+                            {INGESTION_SOURCE_LABELS[ev.source] || ev.source}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {ev.ref}
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground italic">
+                          "{ev.excerpt}"
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* Sidebar - Info */}
+          <div className="space-y-6">
+            {/* Case Info */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Informations</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Cree le</span>
+                  <span>{format(new Date(caseData.case.created_at), "dd MMM yyyy HH:mm", { locale: fr })}</span>
+                </div>
+                {caseData.case.validated_at && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Valide le</span>
+                    <span>{format(new Date(caseData.case.validated_at), "dd MMM yyyy HH:mm", { locale: fr })}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Documents</span>
+                  <span>{caseData.files.length}</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Files */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Documents attaches</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {caseData.files.map((file) => (
+                    <div key={file.id} className="flex items-center gap-2 text-sm">
+                      <FileText className="h-4 w-4 text-muted-foreground" />
+                      <span className="truncate flex-1">{file.filename}</span>
+                      <a 
+                        href={file.file_url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-accent hover:underline"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </AppLayout>
+  );
+}

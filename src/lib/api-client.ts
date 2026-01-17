@@ -146,7 +146,7 @@ export async function uploadAndAttachFile(caseId: string, file: File, fileType: 
   return { file_url, attach_id: attachRes.data.id };
 }
 
-// Classification endpoint
+// Classification endpoint - call edge function directly
 export async function classify(payload: {
   case_id: string;
   file_urls: string[];
@@ -156,7 +156,13 @@ export async function classify(payload: {
     origin_country: string;
   };
 }) {
-  return api.post("/classify", payload, { timeout: 120000 });
+  return axios.post(`${FUNCTIONS_URL}/classify`, payload, {
+    timeout: 120000,
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+    },
+  });
 }
 
 // Export endpoint

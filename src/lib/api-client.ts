@@ -201,9 +201,16 @@ export async function classify(payload: {
   });
 }
 
-// Export endpoint
+// Export endpoint - call edge function directly
 export async function exportPdf(caseId: string) {
-  return api.post(`/cases/${caseId}/export/pdf`);
+  const token = localStorage.getItem("auth_token");
+  return axios.post(`${FUNCTIONS_URL}/export-pdf`, { case_id: caseId }, {
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+      "Authorization": token ? `Bearer ${token}` : "",
+    },
+  });
 }
 
 // Admin endpoints

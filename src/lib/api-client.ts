@@ -1,9 +1,14 @@
 import axios, { AxiosError } from "axios";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://api.example.com/v1";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+// Use Supabase functions URL for auth endpoints
+const FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1`;
 
 export const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: API_BASE_URL || FUNCTIONS_URL,
   timeout: 10000,
   headers: { 
     "Content-Type": "application/json", 
@@ -15,6 +20,10 @@ export const api = axios.create({
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("auth_token");
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  // Add Supabase anon key for edge functions
+  if (config.url?.startsWith(FUNCTIONS_URL) || !API_BASE_URL) {
+    config.headers.apikey = SUPABASE_ANON_KEY;
+  }
   return config;
 });
 
@@ -24,7 +33,9 @@ api.interceptors.response.use(
     const status = err.response?.status;
     
     // Skip auth redirect for auth endpoints
-    const isAuthEndpoint = err.config?.url?.includes("/auth/");
+    const isAuthEndpoint = err.config?.url?.includes("/auth/") || 
+                           err.config?.url?.includes("send-otp") || 
+                           err.config?.url?.includes("verify-otp");
     
     if (status === 401 && !isAuthEndpoint) {
       localStorage.removeItem("auth_token");
@@ -42,13 +53,23 @@ api.interceptors.response.use(
   }
 );
 
-// Auth endpoints
+// Auth endpoints - call edge functions directly
 export async function sendOtp(phone: string) {
-  return api.post("/auth/send_otp", { phone });
+  return axios.post(`${FUNCTIONS_URL}/send-otp`, { phone }, {
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+    },
+  });
 }
 
 export async function verifyOtp(phone: string, otp: string) {
-  return api.post("/auth/verify_otp", { phone, otp });
+  return axios.post(`${FUNCTIONS_URL}/verify-otp`, { phone, otp }, {
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+    },
+  });
 }
 
 // Cases endpoints

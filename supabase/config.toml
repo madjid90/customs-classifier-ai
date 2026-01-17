@@ -1,1 +1,35 @@
 project_id = "zqkpexstzgtdhvcrwprr"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app"
+additional_redirect_urls = ["https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app"]
+jwt_expiry = 3600
+enable_signup = true
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = false
+enable_confirmations = false
+
+[functions.send-otp]
+verify_jwt = false
+
+[functions.verify-otp]
+verify_jwt = false

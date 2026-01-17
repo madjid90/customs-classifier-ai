@@ -22,17 +22,21 @@ api.interceptors.response.use(
   (res) => res,
   (err: AxiosError<{ message?: string; error_message?: string }>) => {
     const status = err.response?.status;
-    if (status === 401) {
+    
+    // Skip auth redirect for auth endpoints
+    const isAuthEndpoint = err.config?.url?.includes("/auth/");
+    
+    if (status === 401 && !isAuthEndpoint) {
       localStorage.removeItem("auth_token");
       localStorage.removeItem("auth_user");
       localStorage.removeItem("auth_expires");
       window.location.href = "/login";
-      return Promise.reject(new Error("Session expirée. Veuillez vous reconnecter."));
+      return Promise.reject(new Error("Session expiree. Veuillez vous reconnecter."));
     }
-    if (status === 403) return Promise.reject(new Error("Accès non autorisé."));
-    if (status === 429) return Promise.reject(new Error("Trop de requêtes. Veuillez patienter."));
-    if (status === 423) return Promise.reject(new Error("Compte temporairement verrouillé."));
-    if (status && status >= 500) return Promise.reject(new Error("Erreur serveur. Veuillez réessayer."));
+    if (status === 403) return Promise.reject(new Error("Acces non autorise."));
+    if (status === 429) return Promise.reject(new Error("Trop de requetes. Veuillez patienter."));
+    if (status === 423) return Promise.reject(new Error("Compte temporairement verrouille."));
+    if (status && status >= 500) return Promise.reject(new Error("Erreur serveur. Veuillez reessayer."));
     const msg = err.response?.data?.message || err.response?.data?.error_message || err.message;
     return Promise.reject(new Error(msg));
   }

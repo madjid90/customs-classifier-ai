@@ -147,13 +147,21 @@ export async function presignFile(data: {
   });
 }
 
+// Attach file to case - call edge function directly
 export async function attachFile(caseId: string, data: {
   file_type: string;
   file_url: string;
   filename: string;
   size_bytes: number;
 }) {
-  return api.post(`/cases/${caseId}/files`, data);
+  const token = localStorage.getItem("auth_token");
+  return axios.post(`${FUNCTIONS_URL}/files-attach/${caseId}`, data, {
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+      "Authorization": token ? `Bearer ${token}` : "",
+    },
+  });
 }
 
 export async function uploadAndAttachFile(caseId: string, file: File, fileType: string) {

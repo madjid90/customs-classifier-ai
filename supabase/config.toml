@@ -42,3 +42,6 @@ verify_jwt = false
 
 [functions.files-presign]
 verify_jwt = false
+
+[functions.export-pdf]
+verify_jwt = false

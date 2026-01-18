@@ -455,6 +455,121 @@ async function generateCandidatesList(
 }
 
 // ============================================================================
+// ÉTAPE 2.5 : SIGNAL DUM (BOOST HISTORIQUE)
+// ============================================================================
+
+interface DUMSignal {
+  count: number;
+  reliability: number;
+  latest: string;
+}
+
+interface HSCandidateWithDUM extends HSCandidate {
+  dum_signal?: DUMSignal;
+}
+
+async function applyDUMSignal(
+  supabase: any,
+  candidates: HSCandidate[],
+  companyId: string,
+  profile: ProductProfile
+): Promise<HSCandidate[]> {
+  console.log("=== ÉTAPE 2.5: SIGNAL DUM ===");
+  
+  if (candidates.length === 0) return candidates;
+  
+  try {
+    // Extraire mots-clés pour la recherche DUM
+    const keywords = [
+      profile.product_name,
+      profile.brand,
+      profile.model,
+      ...profile.material_composition,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(k => k.length > 2)
+      .slice(0, 10);
+    
+    if (keywords.length === 0) {
+      console.log("[DUM] Pas de mots-clés pour signal DUM");
+      return candidates;
+    }
+    
+    console.log(`[DUM] Recherche avec ${keywords.length} mots-clés:`, keywords.slice(0, 5).join(", "));
+    
+    // Appeler get_dum_signal
+    const { data: dumSignal, error } = await supabase.rpc("get_dum_signal", {
+      p_company_id: companyId,
+      p_keywords: keywords,
+      p_limit: 20,
+    });
+    
+    if (error) {
+      console.error("[DUM] Erreur get_dum_signal:", error);
+      return candidates;
+    }
+    
+    if (!dumSignal || dumSignal.length === 0) {
+      console.log("[DUM] Aucun signal DUM historique trouvé");
+      return candidates;
+    }
+    
+    console.log(`[DUM] Signal trouvé: ${dumSignal.length} codes historiques`);
+    
+    // Créer une map des signaux DUM
+    const dumMap = new Map<string, DUMSignal>();
+    for (const d of dumSignal) {
+      dumMap.set(d.hs_code_10, {
+        count: d.match_count,
+        reliability: d.avg_reliability,
+        latest: d.latest_date,
+      });
+    }
+    
+    // Appliquer le boost aux candidats
+    const boostedCandidates: HSCandidateWithDUM[] = candidates.map(c => {
+      const signal = dumMap.get(c.code_10);
+      if (signal) {
+        // Calculer le boost basé sur :
+        // - Nombre de matchs (plus = meilleur) → max +20%
+        // - Fiabilité moyenne (plus = meilleur) → max +10%
+        const countBoost = Math.min(0.2, signal.count * 0.02);
+        const reliabilityBoost = (signal.reliability / 100) * 0.1;
+        
+        const totalBoost = 1 + countBoost + reliabilityBoost;
+        const newScore = Math.min(1, Math.round(c.score * totalBoost * 100) / 100);
+        
+        console.log(`[DUM] Boost ${c.code_10}: ${c.score} → ${newScore} (count=${signal.count}, rel=${signal.reliability})`);
+        
+        return {
+          ...c,
+          score: newScore,
+          match_keywords: [...c.match_keywords, `dum_signal_${signal.count}`],
+          dum_signal: signal,
+        };
+      }
+      return c;
+    });
+    
+    // Re-trier par score décroissant
+    boostedCandidates.sort((a, b) => b.score - a.score);
+    
+    const boostedCount = boostedCandidates.filter(c => c.dum_signal).length;
+    console.log(`[DUM] ${boostedCount}/${boostedCandidates.length} candidats boostés par signal historique`);
+    
+    // Retourner sans le champ dum_signal (non requis dans l'interface HSCandidate)
+    return boostedCandidates.map(({ dum_signal, ...rest }) => rest);
+    
+  } catch (e) {
+    console.error("[DUM] Erreur applyDUMSignal:", e);
+    return candidates;
+  }
+}
+
+// ============================================================================
 // ÉTAPE 3 : RECHERCHE PREUVES RAG
 // ============================================================================
 
@@ -819,9 +934,16 @@ serve(async (req) => {
     const profile = await extractProductProfile(imageUrls, caseData.product_name, previousAnswers);
 
     // ═══════════════════════════════════════════════════════════
-    // ÉTAPE 2: GÉNÉRATION CANDIDATS (SQL - PAS D'IA)
+    // ÉTAPE 2: GÉNÉRATION CANDIDATS (HYBRIDE: TEXTUEL + SÉMANTIQUE)
     // ═══════════════════════════════════════════════════════════
-    const candidates = await generateCandidatesList(supabase, profile, 30);
+    let candidates = await generateCandidatesList(supabase, profile, 30);
+
+    // ═══════════════════════════════════════════════════════════
+    // ÉTAPE 2.5: SIGNAL DUM (BOOST HISTORIQUE)
+    // ═══════════════════════════════════════════════════════════
+    if (candidates.length > 0 && caseData.company_id) {
+      candidates = await applyDUMSignal(supabase, candidates, caseData.company_id, profile);
+    }
 
     // Si 0 candidat → NEED_INFO
     if (candidates.length === 0) {

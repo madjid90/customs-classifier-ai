@@ -609,6 +609,41 @@ export type Database = {
         }
         Returns: boolean
       }
+      match_kb_chunks: {
+        Args: {
+          filter_sources?: string[]
+          match_count?: number
+          match_threshold?: number
+          query_embedding: string
+        }
+        Returns: {
+          doc_id: string
+          id: string
+          ref: string
+          similarity: number
+          source: Database["public"]["Enums"]["ingestion_source"]
+          text: string
+          version_label: string
+        }[]
+      }
+      search_kb_hybrid: {
+        Args: {
+          filter_sources?: string[]
+          match_count?: number
+          query_embedding?: string
+          query_text: string
+        }
+        Returns: {
+          doc_id: string
+          id: string
+          match_type: string
+          ref: string
+          similarity: number
+          source: Database["public"]["Enums"]["ingestion_source"]
+          text: string
+          version_label: string
+        }[]
+      }
     }
     Enums: {
       audit_action:

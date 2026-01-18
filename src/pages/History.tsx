@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Breadcrumbs } from "@/components/layout/Breadcrumbs";
@@ -11,8 +11,10 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { getCases, getCaseDetail } from "@/lib/api-client";
+import { supabase } from "@/integrations/supabase/client";
 import { Case, CaseStatus, CaseDetailResponse, AuditEntry, CASE_STATUS_LABELS, FILE_TYPE_LABELS } from "@/lib/types";
 import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "sonner";
 import { 
   Search, 
   Loader2, 
@@ -23,7 +25,8 @@ import {
   Calendar as CalendarIcon,
   User,
   Filter,
-  X
+  X,
+  RefreshCw
 } from "lucide-react";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -39,6 +42,7 @@ export default function HistoryPage() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
   
   // Filters
   const [search, setSearch] = useState("");
@@ -57,11 +61,7 @@ export default function HistoryPage() {
   // Check if user is manager or admin to show created_by filter
   const canFilterByUser = hasRole("manager") || hasRole("admin");
 
-  useEffect(() => {
-    fetchCases();
-  }, [offset, statusFilter, dateFrom, dateTo, createdByFilter]);
-
-  async function fetchCases() {
+  const fetchCases = useCallback(async () => {
     setIsLoading(true);
     try {
       const params: Record<string, unknown> = { limit, offset };
@@ -80,7 +80,75 @@ export default function HistoryPage() {
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [offset, statusFilter, dateFrom, dateTo, createdByFilter, search, user?.id]);
+
+  // Fetch cases on filter changes
+  useEffect(() => {
+    fetchCases();
+  }, [fetchCases]);
+
+  // Set up Supabase Realtime subscription for cases table
+  useEffect(() => {
+    const channel = supabase
+      .channel('cases-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'cases'
+        },
+        (payload) => {
+          console.log('Realtime update:', payload);
+          
+          if (payload.eventType === 'INSERT') {
+            // New case created - show toast and refresh if on first page
+            toast.info("Nouveau dossier créé", {
+              description: (payload.new as Case).product_name,
+              action: {
+                label: "Actualiser",
+                onClick: () => fetchCases()
+              }
+            });
+            // Auto-refresh if on first page
+            if (offset === 0) {
+              fetchCases();
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedCase = payload.new as Case;
+            // Update the case in the list if it exists
+            setCases(prev => prev.map(c => 
+              c.id === updatedCase.id ? { ...c, ...updatedCase } : c
+            ));
+            // If viewing this case in drawer, update it too
+            if (selectedCase?.case.id === updatedCase.id) {
+              setSelectedCase(prev => prev ? {
+                ...prev,
+                case: { ...prev.case, ...updatedCase }
+              } : null);
+            }
+          } else if (payload.eventType === 'DELETE') {
+            const deletedId = payload.old.id;
+            setCases(prev => prev.filter(c => c.id !== deletedId));
+            // Close drawer if viewing deleted case
+            if (selectedCase?.case.id === deletedId) {
+              setDrawerOpen(false);
+              setSelectedCase(null);
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('Realtime subscription status:', status);
+        setRealtimeConnected(status === 'SUBSCRIBED');
+      });
+
+    // Cleanup on unmount
+    return () => {
+      console.log('Unsubscribing from realtime channel');
+      supabase.removeChannel(channel);
+    };
+  }, [offset, fetchCases, selectedCase?.case.id]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -263,10 +331,30 @@ export default function HistoryPage() {
           {/* Results */}
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Dossiers</CardTitle>
-              <CardDescription>
-                {total} dossier{total !== 1 ? "s" : ""} trouve{total !== 1 ? "s" : ""}
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg">Dossiers</CardTitle>
+                  <CardDescription>
+                    {total} dossier{total !== 1 ? "s" : ""} trouvé{total !== 1 ? "s" : ""}
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  {realtimeConnected && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                      Temps réel
+                    </div>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => fetchCases()}
+                    disabled={isLoading}
+                  >
+                    <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+                  </Button>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               {isLoading ? (

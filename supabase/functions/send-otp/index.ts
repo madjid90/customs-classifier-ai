@@ -1,26 +1,18 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders, getCorsHeaders } from "../_shared/cors.ts";
+import { corsHeaders } from "../_shared/cors.ts";
+import { PhoneSchema, validateRequestBody, normalizePhone } from "../_shared/validation.ts";
 
 // Generate a 6-digit OTP
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Normalize phone to E.164 format
-function normalizePhone(phone: string): string {
-  let cleaned = phone.replace(/\D/g, "");
-  
-  // Handle Moroccan numbers
-  if (cleaned.startsWith("0")) {
-    cleaned = "212" + cleaned.slice(1);
-  }
-  if (!cleaned.startsWith("212") && cleaned.length === 9) {
-    cleaned = "212" + cleaned;
-  }
-  
-  return "+" + cleaned;
-}
+// Request schema for send-otp
+const SendOtpSchema = z.object({
+  phone: PhoneSchema,
+});
 
 // Send SMS via Twilio
 async function sendSmsViaTwilio(to: string, message: string): Promise<{ success: boolean; error?: string }> {
@@ -75,23 +67,21 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { phone } = await req.json();
-
-    if (!phone) {
-      return new Response(
-        JSON.stringify({ message: "Phone number is required", code: "MISSING_PHONE" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Validate request body using centralized schema
+    const validation = await validateRequestBody(req, SendOtpSchema);
+    if (!validation.success) {
+      return validation.error;
     }
 
-    const normalizedPhone = normalizePhone(phone);
-    logger.info(`[send-otp] Processing OTP request for phone: ${normalizedPhone}`);
+    const { phone } = validation.data;
+    const normalizedPhoneNumber = normalizePhone(phone);
+    logger.info(`[send-otp] Processing OTP request for phone: ${normalizedPhoneNumber}`);
 
-    // Validate phone format (E.164)
+    // Validate E.164 format after normalization
     const phoneRegex = /^\+[1-9]\d{9,14}$/;
-    if (!phoneRegex.test(normalizedPhone)) {
+    if (!phoneRegex.test(normalizedPhoneNumber)) {
       return new Response(
-        JSON.stringify({ message: "Invalid phone format", code: "INVALID_PHONE" }),
+        JSON.stringify({ error: "Format de téléphone invalide", code: "INVALID_PHONE" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -106,13 +96,13 @@ Deno.serve(async (req) => {
     const { count: recentCount } = await supabase
       .from("otp_codes")
       .select("*", { count: "exact", head: true })
-      .eq("phone", normalizedPhone)
+      .eq("phone", normalizedPhoneNumber)
       .gte("created_at", oneHourAgo);
 
     if (recentCount && recentCount >= 5) {
-      logger.warn(`[send-otp] Rate limit exceeded for phone: ${normalizedPhone}`);
+      logger.warn(`[send-otp] Rate limit exceeded for phone: ${normalizedPhoneNumber}`);
       return new Response(
-        JSON.stringify({ message: "Too many requests. Please wait before requesting a new code.", code: "RATE_LIMITED" }),
+        JSON.stringify({ error: "Trop de demandes. Veuillez patienter avant de demander un nouveau code.", code: "RATE_LIMITED" }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -125,14 +115,14 @@ Deno.serve(async (req) => {
     await supabase
       .from("otp_codes")
       .delete()
-      .eq("phone", normalizedPhone)
+      .eq("phone", normalizedPhoneNumber)
       .eq("verified", false);
 
     // Store new OTP
     const { error: insertError } = await supabase
       .from("otp_codes")
       .insert({
-        phone: normalizedPhone,
+        phone: normalizedPhoneNumber,
         code: otp,
         expires_at: expiresAt.toISOString(),
       });
@@ -140,14 +130,14 @@ Deno.serve(async (req) => {
     if (insertError) {
       logger.error(`[send-otp] Error storing OTP:`, insertError);
       return new Response(
-        JSON.stringify({ message: "Failed to generate OTP", code: "INTERNAL_ERROR" }),
+        JSON.stringify({ error: "Échec de génération du code OTP", code: "INTERNAL_ERROR" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     // Send SMS via Twilio
     const smsMessage = `Votre code de vérification est: ${otp}. Ce code expire dans 5 minutes.`;
-    const smsResult = await sendSmsViaTwilio(normalizedPhone, smsMessage);
+    const smsResult = await sendSmsViaTwilio(normalizedPhoneNumber, smsMessage);
 
     if (!smsResult.success) {
       logger.error(`[send-otp] Failed to send SMS:`, smsResult.error);
@@ -155,16 +145,16 @@ Deno.serve(async (req) => {
       await supabase
         .from("otp_codes")
         .delete()
-        .eq("phone", normalizedPhone)
+        .eq("phone", normalizedPhoneNumber)
         .eq("code", otp);
       
       return new Response(
-        JSON.stringify({ message: smsResult.error || "Failed to send SMS", code: "SMS_FAILED" }),
+        JSON.stringify({ error: smsResult.error || "Échec d'envoi du SMS", code: "SMS_FAILED" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    logger.info(`[send-otp] OTP sent to ${normalizedPhone} (expires: ${expiresAt.toISOString()})`);
+    logger.info(`[send-otp] OTP sent to ${normalizedPhoneNumber} (expires: ${expiresAt.toISOString()})`);
 
     // Return success
     return new Response(
@@ -178,7 +168,7 @@ Deno.serve(async (req) => {
   } catch (error) {
     logger.error(`[send-otp] Unexpected error:`, error);
     return new Response(
-      JSON.stringify({ message: "Internal server error", code: "INTERNAL_ERROR" }),
+      JSON.stringify({ error: "Erreur interne du serveur", code: "INTERNAL_ERROR" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

@@ -268,15 +268,23 @@ Réponds UNIQUEMENT en JSON strict:
 }
 
 // ============================================================================
-// ÉTAPE 2 : GÉNÉRATION CANDIDATS (SQL UNIQUEMENT - PAS D'IA)
+// ÉTAPE 2 : GÉNÉRATION CANDIDATS (HYBRIDE: TEXTUEL + SÉMANTIQUE)
 // ============================================================================
+
+interface HSCandidateWithSource extends HSCandidate {
+  source?: "textual" | "semantic" | "hybrid";
+}
 
 async function generateCandidatesList(
   supabase: any,
   profile: ProductProfile,
   maxCandidates = 30
 ): Promise<HSCandidate[]> {
-  console.log("=== ÉTAPE 2: GÉNÉRATION CANDIDATS (SQL UNIQUEMENT) ===");
+  console.log("=== ÉTAPE 2: GÉNÉRATION CANDIDATS (HYBRIDE) ===");
+  
+  // ============================================
+  // PARTIE A : Recherche textuelle (existante)
+  // ============================================
   
   // Extraire mots-clés du profil
   const allText = [
@@ -298,65 +306,152 @@ async function generateCandidatesList(
     .split(/[\s,;.()\/\-]+/)
     .filter(k => k.length > 2 && !stopwords.has(k))
     .slice(0, 15);
-  
-  if (keywords.length === 0) {
-    console.log("Aucun mot-clé → liste vide");
-    return [];
-  }
 
-  console.log(`Recherche avec ${keywords.length} mots-clés:`, keywords.slice(0, 5).join(", "));
+  let textualCandidates: HSCandidateWithSource[] = [];
 
-  // Recherche SQL avec ILIKE sur les mots-clés
-  const orConditions = keywords.slice(0, 8).map(k => `label_fr.ilike.%${k}%`).join(",");
-  
-  const { data: hsCodes, error: hsError } = await supabase
-    .from("hs_codes")
-    .select("code_10, code_6, chapter_2, label_fr, label_ar, unit, taxes, enrichment")
-    .eq("active", true)
-    .or(orConditions)
-    .limit(maxCandidates * 3);
+  if (keywords.length > 0) {
+    console.log(`[TEXTUEL] Recherche avec ${keywords.length} mots-clés:`, keywords.slice(0, 5).join(", "));
 
-  if (hsError) {
-    console.error("Erreur hs_codes:", hsError);
-    return [];
-  }
-
-  if (!hsCodes || hsCodes.length === 0) {
-    console.log("Aucun code trouvé");
-    return [];
-  }
-
-  // Scorer chaque candidat par nombre de mots-clés matchés
-  const candidates: HSCandidate[] = hsCodes.map((hs: any) => {
-    const labelLower = hs.label_fr.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    const enrichmentText = hs.enrichment 
-      ? JSON.stringify(hs.enrichment).toLowerCase() 
-      : "";
-    const fullText = labelLower + " " + enrichmentText;
+    // Recherche SQL avec ILIKE sur les mots-clés
+    const orConditions = keywords.slice(0, 8).map(k => `label_fr.ilike.%${k}%`).join(",");
     
-    const matchedKeywords = keywords.filter(k => fullText.includes(k));
-    const score = matchedKeywords.length / keywords.length;
-    
-    return {
-      code_10: hs.code_10,
-      code_6: hs.code_6,
-      chapter_2: hs.chapter_2,
-      label_fr: hs.label_fr,
-      label_ar: hs.label_ar,
-      unit: hs.unit,
-      taxes: hs.taxes,
-      score: Math.round(score * 100) / 100,
-      match_keywords: matchedKeywords,
-    };
-  });
+    const { data: hsCodes, error: hsError } = await supabase
+      .from("hs_codes")
+      .select("code_10, code_6, chapter_2, label_fr, label_ar, unit, taxes, enrichment")
+      .eq("active", true)
+      .or(orConditions)
+      .limit(maxCandidates * 3);
 
-  // Trier par score décroissant
-  candidates.sort((a, b) => b.score - a.score);
+    if (hsError) {
+      console.error("[TEXTUEL] Erreur hs_codes:", hsError);
+    } else if (hsCodes && hsCodes.length > 0) {
+      // Scorer chaque candidat par nombre de mots-clés matchés
+      textualCandidates = hsCodes.map((hs: any) => {
+        const labelLower = hs.label_fr.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const enrichmentText = hs.enrichment 
+          ? JSON.stringify(hs.enrichment).toLowerCase() 
+          : "";
+        const fullText = labelLower + " " + enrichmentText;
+        
+        const matchedKeywords = keywords.filter(k => fullText.includes(k));
+        const score = matchedKeywords.length / keywords.length;
+        
+        return {
+          code_10: hs.code_10,
+          code_6: hs.code_6,
+          chapter_2: hs.chapter_2,
+          label_fr: hs.label_fr,
+          label_ar: hs.label_ar,
+          unit: hs.unit,
+          taxes: hs.taxes,
+          score: Math.round(score * 100) / 100,
+          match_keywords: matchedKeywords,
+          source: "textual" as const,
+        };
+      });
+      console.log(`[TEXTUEL] ${textualCandidates.length} codes trouvés`);
+    }
+  }
+
+  // ============================================
+  // PARTIE B : Recherche sémantique (NOUVEAU)
+  // ============================================
   
-  const result = candidates.slice(0, maxCandidates);
-  console.log(`candidates[]: ${result.length} codes, top: ${result[0]?.code_10 || "N/A"} (score: ${result[0]?.score || 0})`);
+  let semanticCandidates: HSCandidateWithSource[] = [];
   
-  return result;
+  try {
+    // Construire texte de recherche riche
+    const searchText = [
+      profile.product_name,
+      profile.description,
+      profile.usage_function,
+      ...profile.material_composition,
+    ].filter(Boolean).join(" ");
+    
+    if (searchText.trim().length > 10) {
+      console.log(`[SÉMANTIQUE] Génération embedding pour: "${searchText.substring(0, 100)}..."`);
+      
+      // Générer embedding
+      const searchEmbedding = await generateEmbedding(searchText);
+      
+      if (searchEmbedding.length > 0) {
+        // Recherche sémantique via match_hs_codes
+        const { data: semanticResults, error: semanticError } = await supabase.rpc("match_hs_codes", {
+          query_embedding: searchEmbedding,
+          match_threshold: 0.4,
+          match_count: 20,
+        });
+        
+        if (semanticError) {
+          console.error("[SÉMANTIQUE] Erreur match_hs_codes:", semanticError);
+        } else if (semanticResults && semanticResults.length > 0) {
+          semanticCandidates = semanticResults.map((hs: any) => ({
+            code_10: hs.code_10,
+            code_6: hs.code_6,
+            chapter_2: hs.chapter_2,
+            label_fr: hs.label_fr,
+            label_ar: hs.label_ar,
+            unit: hs.unit,
+            taxes: hs.taxes,
+            score: Math.round(hs.similarity * 100) / 100,
+            match_keywords: ["semantic"],
+            source: "semantic" as const,
+          }));
+          console.log(`[SÉMANTIQUE] ${semanticCandidates.length} codes trouvés (similarité > 0.4)`);
+        } else {
+          console.log("[SÉMANTIQUE] Aucun résultat au-dessus du seuil");
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[SÉMANTIQUE] Erreur:", e);
+    // Continue avec résultats textuels uniquement
+  }
+
+  // ============================================
+  // FUSION DES RÉSULTATS
+  // ============================================
+  
+  const candidateMap = new Map<string, HSCandidateWithSource>();
+  
+  // Ajouter les candidats textuels
+  for (const c of textualCandidates) {
+    candidateMap.set(c.code_10, { ...c });
+  }
+  
+  // Fusionner les candidats sémantiques
+  for (const c of semanticCandidates) {
+    if (candidateMap.has(c.code_10)) {
+      // Présent dans les deux → bonus de score x1.5
+      const existing = candidateMap.get(c.code_10)!;
+      existing.score = Math.min(1, Math.round(existing.score * 1.5 * 100) / 100);
+      existing.match_keywords = [...existing.match_keywords, "semantic_boost"];
+      existing.source = "hybrid";
+    } else {
+      // Uniquement sémantique
+      candidateMap.set(c.code_10, c);
+    }
+  }
+  
+  // Convertir en array et trier par score décroissant
+  const allCandidates = Array.from(candidateMap.values());
+  allCandidates.sort((a, b) => b.score - a.score);
+  
+  const result = allCandidates.slice(0, maxCandidates);
+  
+  // Stats de fusion
+  const hybridCount = result.filter(c => c.source === "hybrid").length;
+  const textOnlyCount = result.filter(c => c.source === "textual").length;
+  const semOnlyCount = result.filter(c => c.source === "semantic").length;
+  
+  console.log(`[HYBRIDE] ${result.length} candidats finaux:`);
+  console.log(`  - hybrid (texte+sémantique): ${hybridCount}`);
+  console.log(`  - textuel uniquement: ${textOnlyCount}`);
+  console.log(`  - sémantique uniquement: ${semOnlyCount}`);
+  console.log(`  - top: ${result[0]?.code_10 || "N/A"} (score: ${result[0]?.score || 0}, source: ${result[0]?.source || "N/A"})`);
+  
+  // Nettoyer le champ source avant de retourner (pas dans l'interface finale)
+  return result.map(({ source, ...rest }) => rest) as HSCandidate[];
 }
 
 // ============================================================================

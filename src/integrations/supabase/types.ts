@@ -228,9 +228,13 @@ export type Database = {
           id: string
           origin_country: string
           product_description: string
+          quantity: number | null
           reliability_score: number | null
+          unit: string | null
+          validated: boolean | null
           validated_at: string | null
           validated_by: string | null
+          value_mad: number | null
         }
         Insert: {
           attachments?: Json | null
@@ -242,9 +246,13 @@ export type Database = {
           id?: string
           origin_country: string
           product_description: string
+          quantity?: number | null
           reliability_score?: number | null
+          unit?: string | null
+          validated?: boolean | null
           validated_at?: string | null
           validated_by?: string | null
+          value_mad?: number | null
         }
         Update: {
           attachments?: Json | null
@@ -256,9 +264,13 @@ export type Database = {
           id?: string
           origin_country?: string
           product_description?: string
+          quantity?: number | null
           reliability_score?: number | null
+          unit?: string | null
+          validated?: boolean | null
           validated_at?: string | null
           validated_by?: string | null
+          value_mad?: number | null
         }
         Relationships: [
           {
@@ -309,8 +321,11 @@ export type Database = {
           active_version_label: string
           chapter_2: string
           code_10: string
+          code_4: string | null
           code_6: string
           created_at: string
+          embedding: string | null
+          enrichment: Json | null
           label_ar: string | null
           label_fr: string
           restrictions: string[] | null
@@ -323,8 +338,11 @@ export type Database = {
           active_version_label: string
           chapter_2: string
           code_10: string
+          code_4?: string | null
           code_6: string
           created_at?: string
+          embedding?: string | null
+          enrichment?: Json | null
           label_ar?: string | null
           label_fr: string
           restrictions?: string[] | null
@@ -337,8 +355,11 @@ export type Database = {
           active_version_label?: string
           chapter_2?: string
           code_10?: string
+          code_4?: string | null
           code_6?: string
           created_at?: string
+          embedding?: string | null
+          enrichment?: Json | null
           label_ar?: string | null
           label_fr?: string
           restrictions?: string[] | null
@@ -532,6 +553,7 @@ export type Database = {
           doc_id: string
           embedding: string | null
           id: string
+          metadata: Json | null
           ref: string
           source: Database["public"]["Enums"]["ingestion_source"]
           text: string
@@ -542,6 +564,7 @@ export type Database = {
           doc_id: string
           embedding?: string | null
           id?: string
+          metadata?: Json | null
           ref: string
           source: Database["public"]["Enums"]["ingestion_source"]
           text: string
@@ -552,6 +575,7 @@ export type Database = {
           doc_id?: string
           embedding?: string | null
           id?: string
+          metadata?: Json | null
           ref?: string
           source?: Database["public"]["Enums"]["ingestion_source"]
           text?: string
@@ -707,6 +731,24 @@ export type Database = {
         }
         Returns: boolean
       }
+      match_hs_codes: {
+        Args: {
+          match_count?: number
+          match_threshold?: number
+          query_embedding: string
+        }
+        Returns: {
+          chapter_2: string
+          code_10: string
+          code_4: string
+          code_6: string
+          enrichment: Json
+          label_ar: string
+          label_fr: string
+          similarity: number
+          taxes: Json
+        }[]
+      }
       match_kb_chunks: {
         Args: {
           filter_sources?: string[]
@@ -722,6 +764,20 @@ export type Database = {
           source: Database["public"]["Enums"]["ingestion_source"]
           text: string
           version_label: string
+        }[]
+      }
+      search_hs_codes: {
+        Args: { match_limit?: number; search_query: string }
+        Returns: {
+          chapter_2: string
+          code_10: string
+          code_4: string
+          code_6: string
+          label_ar: string
+          label_fr: string
+          rank: number
+          taxes: Json
+          unit: string
         }[]
       }
       search_kb_hybrid: {

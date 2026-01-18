@@ -27,6 +27,99 @@ function getOpenAIConfig() {
 }
 
 // ============================================================================
+// RATE LIMITING
+// ============================================================================
+
+const RATE_LIMIT_WINDOW_MINUTES = 60; // Fenêtre de 1 heure
+const RATE_LIMIT_MAX_REQUESTS = 50; // Max 50 classifications par heure (user normal)
+const RATE_LIMIT_MAX_REQUESTS_ADMIN = 200; // Max 200 pour admins
+
+interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  resetAt: Date;
+  limit: number;
+}
+
+async function checkRateLimit(
+  supabase: any, 
+  userId: string, 
+  isAdmin: boolean
+): Promise<RateLimitResult> {
+  const maxRequests = isAdmin ? RATE_LIMIT_MAX_REQUESTS_ADMIN : RATE_LIMIT_MAX_REQUESTS;
+  
+  // Calculer le début de la fenêtre (début de l'heure courante)
+  const windowStart = new Date();
+  windowStart.setMinutes(0, 0, 0);
+  
+  const resetAt = new Date(windowStart);
+  resetAt.setHours(resetAt.getHours() + 1);
+  
+  try {
+    // Chercher l'entrée existante pour cette fenêtre
+    const { data, error } = await supabase
+      .from("rate_limits")
+      .select("id, request_count")
+      .eq("user_id", userId)
+      .eq("endpoint", "classify")
+      .gte("window_start", windowStart.toISOString())
+      .order("window_start", { ascending: false })
+      .limit(1)
+      .single();
+    
+    const currentCount = data?.request_count || 0;
+    
+    // Vérifier si limite atteinte
+    if (currentCount >= maxRequests) {
+      console.log(`[RATE_LIMIT] User ${userId} dépassé: ${currentCount}/${maxRequests}`);
+      return {
+        allowed: false,
+        remaining: 0,
+        resetAt,
+        limit: maxRequests,
+      };
+    }
+    
+    // Incrémenter le compteur
+    if (data?.id) {
+      await supabase
+        .from("rate_limits")
+        .update({ request_count: currentCount + 1 })
+        .eq("id", data.id);
+    } else {
+      await supabase
+        .from("rate_limits")
+        .insert({
+          user_id: userId,
+          endpoint: "classify",
+          window_start: windowStart.toISOString(),
+          request_count: 1,
+        });
+    }
+    
+    const remaining = maxRequests - currentCount - 1;
+    console.log(`[RATE_LIMIT] User ${userId}: ${currentCount + 1}/${maxRequests} (remaining: ${remaining})`);
+    
+    return {
+      allowed: true,
+      remaining,
+      resetAt,
+      limit: maxRequests,
+    };
+    
+  } catch (e) {
+    // En cas d'erreur, on laisse passer (fail-open pour ne pas bloquer)
+    console.error("[RATE_LIMIT] Erreur:", e);
+    return {
+      allowed: true,
+      remaining: maxRequests,
+      resetAt,
+      limit: maxRequests,
+    };
+  }
+}
+
+// ============================================================================
 // TYPES STRICTS
 // ============================================================================
 
@@ -883,6 +976,47 @@ serve(async (req) => {
       );
     }
 
+    // ═══════════════════════════════════════════════════════════
+    // RATE LIMITING CHECK
+    // ═══════════════════════════════════════════════════════════
+    
+    // Vérifier si l'utilisateur est admin (limite plus élevée)
+    const { data: hasAdminRole } = await supabase.rpc("has_role", { 
+      _user_id: user.id, 
+      _role: "admin" 
+    });
+    const isAdmin = !!hasAdminRole;
+    
+    const rateLimit = await checkRateLimit(supabase, user.id, isAdmin);
+    
+    if (!rateLimit.allowed) {
+      return new Response(
+        JSON.stringify({
+          error: "Rate limit exceeded",
+          message: `Limite de ${rateLimit.limit} classifications par heure atteinte. Réessayez après ${rateLimit.resetAt.toISOString()}`,
+          reset_at: rateLimit.resetAt.toISOString(),
+          remaining: 0,
+        }),
+        {
+          status: 429,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json",
+            "X-RateLimit-Limit": rateLimit.limit.toString(),
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset": rateLimit.resetAt.toISOString(),
+          },
+        }
+      );
+    }
+
+    // Stocker les infos rate limit pour les ajouter aux réponses
+    const rateLimitHeaders = {
+      "X-RateLimit-Limit": rateLimit.limit.toString(),
+      "X-RateLimit-Remaining": rateLimit.remaining.toString(),
+      "X-RateLimit-Reset": rateLimit.resetAt.toISOString(),
+    };
+
     // Récupérer le dossier
     const { data: caseData, error: caseError } = await supabase
       .from("cases")
@@ -893,7 +1027,7 @@ serve(async (req) => {
     if (caseError || !caseData) {
       return new Response(
         JSON.stringify({ error: "Dossier non trouvé" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 404, headers: { ...corsHeaders, ...rateLimitHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -984,7 +1118,7 @@ serve(async (req) => {
 
       return new Response(
         JSON.stringify({ success: true, result: needInfoResult }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsHeaders, ...rateLimitHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -1082,7 +1216,7 @@ serve(async (req) => {
 
     return new Response(
       JSON.stringify({ success: true, result: finalResult, verification }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { headers: { ...corsHeaders, ...rateLimitHeaders, "Content-Type": "application/json" } }
     );
 
   } catch (error) {

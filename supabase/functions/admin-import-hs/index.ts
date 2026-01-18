@@ -19,6 +19,8 @@ interface ImportResult {
   updated: number;
   errors: number;
   warnings: string[];
+  embeddings_triggered?: boolean;
+  enrichment_triggered?: boolean;
 }
 
 // Parse CSV content
@@ -218,6 +220,91 @@ Deno.serve(async (req) => {
       }
 
       logger.info(`[import-hs] Import complete:`, result);
+
+      // ========================================================================
+      // BACKGROUND TASKS: Auto-trigger embeddings and enrichment after import
+      // ========================================================================
+      
+      const runBackgroundTask = (task: () => Promise<void>) => {
+        // @ts-ignore - EdgeRuntime disponible dans Deno Deploy
+        if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+          // @ts-ignore
+          EdgeRuntime.waitUntil(task());
+        } else {
+          task();
+        }
+      };
+
+      if (result.imported > 0) {
+        result.embeddings_triggered = true;
+        result.enrichment_triggered = true;
+
+        // 1. Auto-generate embeddings for new HS codes
+        console.log(`[import-hs] Triggering background HS embeddings generation`);
+        
+        const embeddingsTask = async () => {
+          try {
+            // Small delay to ensure codes are committed
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            const embResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embeddings`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${supabaseServiceKey}`,
+              },
+              body: JSON.stringify({
+                mode: "batch",
+                target: "hs",
+                batch_size: Math.min(result.imported, 50),
+              }),
+            });
+            
+            if (embResponse.ok) {
+              const embResult = await embResponse.json();
+              console.log(`[import-hs] HS embeddings generated: ${embResult.processed} processed, ${embResult.remaining} remaining`);
+            } else {
+              console.error(`[import-hs] HS embeddings failed: ${embResponse.status}`);
+            }
+          } catch (e) {
+            console.error("[import-hs] HS embeddings error:", e);
+          }
+        };
+        
+        runBackgroundTask(embeddingsTask);
+
+        // 2. Auto-enrich HS codes
+        console.log(`[import-hs] Triggering background HS enrichment`);
+        
+        const enrichTask = async () => {
+          try {
+            // Wait for embeddings to start first
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            
+            const enrichResponse = await fetch(`${supabaseUrl}/functions/v1/enrich-hs-codes`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${supabaseServiceKey}`,
+              },
+              body: JSON.stringify({
+                batch_size: Math.min(result.imported, 20),
+              }),
+            });
+            
+            if (enrichResponse.ok) {
+              const enrichResult = await enrichResponse.json();
+              console.log(`[import-hs] HS enrichment complete: ${enrichResult.processed} processed, ${enrichResult.remaining} remaining`);
+            } else {
+              console.error(`[import-hs] HS enrichment failed: ${enrichResponse.status}`);
+            }
+          } catch (e) {
+            console.error("[import-hs] HS enrichment error:", e);
+          }
+        };
+        
+        runBackgroundTask(enrichTask);
+      }
 
       return new Response(
         JSON.stringify(result),

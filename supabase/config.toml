@@ -57,3 +57,6 @@ verify_jwt = false
 
 [functions.import-dum]
 verify_jwt = false
+
+[functions.import-kb]
+verify_jwt = false

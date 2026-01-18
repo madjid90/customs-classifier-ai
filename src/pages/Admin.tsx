@@ -12,6 +12,7 @@ import { IngestionStatusBadge } from "@/components/ui/status-badge";
 import { HSCodeImport } from "@/components/admin/HSCodeImport";
 import { DUMImport } from "@/components/admin/DUMImport";
 import { KBImport } from "@/components/admin/KBImport";
+import { DataIngestionPanel } from "@/components/admin/DataIngestionPanel";
 import { 
   getIngestionList, 
   registerIngestion, 
@@ -43,7 +44,8 @@ import {
   Activity,
   BookOpen,
   ClipboardList,
-  Library
+  Library,
+  Sparkles
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -265,6 +267,10 @@ export default function AdminPage() {
               <TabsTrigger value="dum" className="flex items-center gap-2">
                 <ClipboardList className="h-4 w-4" />
                 DUM
+              </TabsTrigger>
+              <TabsTrigger value="ai-ingestion" className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4" />
+                IA Ingestion
               </TabsTrigger>
             </TabsList>
 
@@ -543,6 +549,11 @@ export default function AdminPage() {
             {/* DUM Import Tab */}
             <TabsContent value="dum">
               <DUMImport />
+            </TabsContent>
+
+            {/* AI Ingestion Tab */}
+            <TabsContent value="ai-ingestion">
+              <DataIngestionPanel />
             </TabsContent>
           </Tabs>
         </div>

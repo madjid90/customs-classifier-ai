@@ -22,7 +22,9 @@ import {
   Scale,
   FileCode,
   Package,
-  RefreshCw
+  RefreshCw,
+  Sparkles,
+  Wand2
 } from "lucide-react";
 import { toast } from "sonner";
 import { 
@@ -35,6 +37,7 @@ import {
   type DocumentInput,
   type KBStats 
 } from "@/lib/kb-import-api";
+import { extractKBChunks, readFileAsText, type ExtractedKBChunk } from "@/lib/extract-api";
 
 const SOURCE_CONFIG: Record<KBSource, { label: string; icon: typeof BookOpen; color: string; description: string }> = {
   omd: { 
@@ -80,6 +83,13 @@ export function KBImport() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  
+  // AI Extraction states
+  const [aiFile, setAiFile] = useState<File | null>(null);
+  const [aiContent, setAiContent] = useState("");
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractedChunks, setExtractedChunks] = useState<ExtractedKBChunk[]>([]);
+  const [extractionStats, setExtractionStats] = useState<{ valid: number; invalid: number } | null>(null);
 
   // File upload handler
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -246,15 +256,118 @@ export function KBImport() {
     loadStats();
   });
 
+  // AI Extraction handler
+  const handleAIExtract = async () => {
+    let content = aiContent;
+    
+    // If file is provided, read it
+    if (aiFile && !aiContent.trim()) {
+      try {
+        content = await readFileAsText(aiFile);
+      } catch (e) {
+        toast.error("Erreur lecture fichier");
+        return;
+      }
+    }
+    
+    if (!content.trim()) {
+      toast.error("Veuillez fournir un fichier ou du contenu texte");
+      return;
+    }
+
+    setIsExtracting(true);
+    setExtractedChunks([]);
+    setExtractionStats(null);
+
+    try {
+      toast.info("Extraction IA en cours... Cela peut prendre quelques minutes.");
+      
+      const result = await extractKBChunks(content, versionLabel);
+      
+      if (result.success && result.extracted.length > 0) {
+        setExtractedChunks(result.extracted);
+        setExtractionStats({
+          valid: result.stats.valid,
+          invalid: result.stats.invalid
+        });
+        toast.success(`${result.stats.valid} chunks extraits par l'IA`);
+      } else {
+        toast.warning("Aucun chunk extrait. Vérifiez le contenu du fichier.");
+      }
+      
+      if (result.errors && result.errors.length > 0) {
+        console.warn("AI extraction warnings:", result.errors);
+      }
+    } catch (e) {
+      console.error("AI extraction error:", e);
+      toast.error(e instanceof Error ? e.message : "Erreur extraction IA");
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+
+  // Convert extracted chunks to documents and import
+  const handleImportExtracted = async () => {
+    if (extractedChunks.length === 0) {
+      toast.error("Aucun chunk à importer");
+      return;
+    }
+
+    setIsImporting(true);
+    setImportProgress(10);
+
+    try {
+      // Convert extracted chunks to documents format
+      const docsToImport: DocumentInput[] = extractedChunks.map(chunk => ({
+        doc_id: chunk.doc_id,
+        content: chunk.text,
+        ref_prefix: chunk.ref,
+      }));
+
+      setImportProgress(30);
+
+      const result = await importKBDocuments({
+        source,
+        version_label: versionLabel,
+        documents: docsToImport,
+        chunk_size: chunkSize,
+        chunk_overlap: chunkOverlap,
+        clear_existing: clearExisting,
+      });
+
+      setImportProgress(100);
+
+      if (result.success) {
+        toast.success(`Import réussi: ${result.total_chunks_created} chunks créés`);
+        setExtractedChunks([]);
+        setExtractionStats(null);
+        setAiFile(null);
+        setAiContent("");
+        loadStats();
+      } else {
+        toast.warning(`Import partiel: ${result.total_chunks_created} chunks, ${result.errors.length} erreurs`);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erreur import");
+    } finally {
+      setIsImporting(false);
+      setImportProgress(0);
+    }
+  };
+
   const SourceIcon = SOURCE_CONFIG[source].icon;
 
   return (
     <div className="space-y-6">
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="import" className="flex items-center gap-2">
             <Upload className="h-4 w-4" />
             Import
+          </TabsTrigger>
+          <TabsTrigger value="ai-extract" className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4" />
+            Extraction IA
           </TabsTrigger>
           <TabsTrigger value="browse" className="flex items-center gap-2">
             <Search className="h-4 w-4" />
@@ -484,6 +597,173 @@ export function KBImport() {
               </Button>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* AI EXTRACTION TAB */}
+        <TabsContent value="ai-extract" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-purple-500" />
+                Extraction IA de documents
+              </CardTitle>
+              <CardDescription>
+                Utilisez l'IA pour extraire automatiquement des chunks structurés depuis des documents complexes
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Source & Version for AI */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Source cible</Label>
+                  <Select value={source} onValueChange={(v) => setSource(v as KBSource)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(SOURCE_CONFIG).map(([key, config]) => (
+                        <SelectItem key={key} value={key}>
+                          <div className="flex items-center gap-2">
+                            <config.icon className="h-4 w-4" />
+                            {config.label}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Version</Label>
+                  <Input
+                    value={versionLabel}
+                    onChange={(e) => setVersionLabel(e.target.value)}
+                    placeholder="ex: 2024"
+                  />
+                </div>
+              </div>
+
+              {/* File Input */}
+              <div className="space-y-2">
+                <Label>Fichier source</Label>
+                <Input
+                  type="file"
+                  accept=".txt,.md,.pdf,.doc,.docx"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setAiFile(file);
+                      setAiContent("");
+                    }
+                  }}
+                />
+                {aiFile && (
+                  <p className="text-sm text-muted-foreground">
+                    Fichier: {aiFile.name} ({(aiFile.size / 1024).toFixed(1)} KB)
+                  </p>
+                )}
+              </div>
+
+              {/* Or Text Content */}
+              <div className="space-y-2">
+                <Label>Ou collez le contenu texte</Label>
+                <Textarea
+                  value={aiContent}
+                  onChange={(e) => {
+                    setAiContent(e.target.value);
+                    if (e.target.value.trim()) setAiFile(null);
+                  }}
+                  placeholder="Collez ici le texte brut du document à analyser..."
+                  rows={8}
+                />
+                {aiContent && (
+                  <p className="text-sm text-muted-foreground">
+                    {aiContent.length} caractères
+                  </p>
+                )}
+              </div>
+
+              <Button
+                onClick={handleAIExtract}
+                disabled={isExtracting || (!aiFile && !aiContent.trim())}
+                className="w-full"
+                variant="secondary"
+              >
+                {isExtracting ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Extraction en cours...
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="h-4 w-4 mr-2" />
+                    Extraire avec l'IA
+                  </>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Extraction Results */}
+          {extractionStats && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <CheckCircle className="h-5 w-5 text-green-500" />
+                  Résultats de l'extraction
+                </CardTitle>
+                <CardDescription>
+                  {extractionStats.valid} chunks valides extraits, {extractionStats.invalid} invalides
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3 max-h-[400px] overflow-y-auto">
+                  {extractedChunks.map((chunk, idx) => (
+                    <div key={idx} className="p-3 bg-muted rounded-lg space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">{chunk.doc_id}</Badge>
+                        <span className="text-sm font-medium">{chunk.ref}</span>
+                      </div>
+                      <p className="text-sm text-muted-foreground line-clamp-3">
+                        {chunk.text}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {chunk.text.length} caractères | Source: {chunk.source}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Import Extracted Button */}
+          {extractedChunks.length > 0 && (
+            <Card>
+              <CardContent className="pt-6">
+                {isImporting && (
+                  <Progress value={importProgress} className="mb-4" />
+                )}
+                <Button
+                  onClick={handleImportExtracted}
+                  disabled={isImporting}
+                  className="w-full"
+                  size="lg"
+                >
+                  {isImporting ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      Import en cours...
+                    </>
+                  ) : (
+                    <>
+                      <Database className="h-4 w-4 mr-2" />
+                      Importer {extractedChunks.length} chunks extraits
+                    </>
+                  )}
+                </Button>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         {/* BROWSE TAB */}

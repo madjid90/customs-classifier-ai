@@ -1,4 +1,11 @@
-import axios, { AxiosError } from "axios";
+import axios, { AxiosError, AxiosResponse } from "axios";
+import { 
+  createValidationInterceptor, 
+  configureValidator, 
+  getValidatorConfig,
+  OpenApiValidationError,
+  type ValidatorConfig 
+} from "./openapi-validator";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -17,6 +24,7 @@ export const api = axios.create({
   },
 });
 
+// Request interceptor
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("auth_token");
   if (token) config.headers.Authorization = `Bearer ${token}`;
@@ -27,6 +35,26 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// OpenAPI validation interceptor (dev mode only)
+if (import.meta.env.DEV) {
+  const validationInterceptor = createValidationInterceptor(FUNCTIONS_URL);
+  api.interceptors.response.use(
+    async (response: AxiosResponse) => {
+      try {
+        await validationInterceptor(response);
+      } catch (error) {
+        if (error instanceof OpenApiValidationError) {
+          // Log but don't block in non-strict mode (default behavior)
+          console.warn("[API] Response validation warning:", error.message);
+        }
+      }
+      return response;
+    },
+    (error) => Promise.reject(error)
+  );
+}
+
+// Error handling interceptor
 api.interceptors.response.use(
   (res) => res,
   (err: AxiosError<{ message?: string; error_message?: string }>) => {
@@ -52,6 +80,10 @@ api.interceptors.response.use(
     return Promise.reject(new Error(msg));
   }
 );
+
+// Export validator utilities for external configuration
+export { configureValidator, getValidatorConfig, OpenApiValidationError };
+export type { ValidatorConfig };
 
 // Auth endpoints - call edge functions directly
 export async function sendOtp(phone: string) {

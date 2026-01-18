@@ -4,6 +4,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { Breadcrumbs } from "@/components/layout/Breadcrumbs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { FileUploadZone } from "@/components/case/FileUploadZone";
 import { QuestionForm } from "@/components/case/QuestionForm";
@@ -267,8 +268,85 @@ export default function AnalyzeCasePage() {
   if (isLoading) {
     return (
       <AppLayout>
-        <div className="flex min-h-[50vh] items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <div className="container py-8">
+          <Skeleton className="h-6 w-48 mb-6" />
+          
+          <div className="mt-6 grid gap-6 lg:grid-cols-3">
+            {/* Main content skeleton */}
+            <div className="space-y-6 lg:col-span-2">
+              {/* Case header skeleton */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <Skeleton className="h-6 w-6 rounded" />
+                      <div className="space-y-2">
+                        <Skeleton className="h-5 w-48" />
+                        <Skeleton className="h-4 w-32" />
+                      </div>
+                    </div>
+                    <Skeleton className="h-6 w-24 rounded-full" />
+                  </div>
+                </CardHeader>
+              </Card>
+
+              {/* File upload zone skeleton */}
+              <Card>
+                <CardHeader>
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="h-4 w-56 mt-1" />
+                </CardHeader>
+                <CardContent>
+                  <div className="border-2 border-dashed rounded-lg p-8">
+                    <div className="flex flex-col items-center gap-3">
+                      <Skeleton className="h-10 w-10 rounded-full" />
+                      <Skeleton className="h-4 w-48" />
+                      <Skeleton className="h-4 w-32" />
+                    </div>
+                  </div>
+                  <div className="mt-4 space-y-2">
+                    {[1, 2].map((i) => (
+                      <div key={i} className="flex items-center gap-3 p-3 border rounded-lg">
+                        <Skeleton className="h-8 w-8 rounded" />
+                        <div className="flex-1 space-y-1">
+                          <Skeleton className="h-4 w-40" />
+                          <Skeleton className="h-3 w-20" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Sidebar skeleton */}
+            <div className="space-y-6">
+              <Card>
+                <CardHeader className="pb-3">
+                  <Skeleton className="h-5 w-20" />
+                  <Skeleton className="h-4 w-48 mt-1" />
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <Skeleton className="h-4 w-28" />
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-3 w-full" />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <Skeleton className="h-4 w-20" />
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {[1, 2, 3, 4].map((i) => (
+                      <Skeleton key={i} className="h-4 w-full" />
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
         </div>
       </AppLayout>
     );

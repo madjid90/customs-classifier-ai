@@ -25,6 +25,52 @@ function normalizePhone(phone: string): string {
   return "+" + cleaned;
 }
 
+// Send SMS via Twilio
+async function sendSmsViaTwilio(to: string, message: string): Promise<{ success: boolean; error?: string }> {
+  const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
+  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
+  const fromPhone = Deno.env.get("TWILIO_PHONE_NUMBER");
+
+  if (!accountSid || !authToken || !fromPhone) {
+    console.error("[send-otp] Twilio credentials not configured");
+    return { success: false, error: "SMS service not configured" };
+  }
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+  
+  const credentials = btoa(`${accountSid}:${authToken}`);
+  
+  const body = new URLSearchParams({
+    To: to,
+    From: fromPhone,
+    Body: message,
+  });
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${credentials}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: body.toString(),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error("[send-otp] Twilio error:", data);
+      return { success: false, error: data.message || "Failed to send SMS" };
+    }
+
+    console.log(`[send-otp] SMS sent successfully, SID: ${data.sid}`);
+    return { success: true };
+  } catch (error) {
+    console.error("[send-otp] Twilio request failed:", error);
+    return { success: false, error: "SMS service unavailable" };
+  }
+}
+
 Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -102,18 +148,32 @@ Deno.serve(async (req) => {
       );
     }
 
-    // In production, integrate with SMS provider (Twilio, etc.)
-    // For development, log the OTP
-    console.log(`[send-otp] OTP for ${normalizedPhone}: ${otp} (expires: ${expiresAt.toISOString()})`);
+    // Send SMS via Twilio
+    const smsMessage = `Votre code de vérification est: ${otp}. Ce code expire dans 5 minutes.`;
+    const smsResult = await sendSmsViaTwilio(normalizedPhone, smsMessage);
+
+    if (!smsResult.success) {
+      console.error(`[send-otp] Failed to send SMS:`, smsResult.error);
+      // Delete the OTP since SMS failed
+      await supabase
+        .from("otp_codes")
+        .delete()
+        .eq("phone", normalizedPhone)
+        .eq("code", otp);
+      
+      return new Response(
+        JSON.stringify({ message: smsResult.error || "Failed to send SMS", code: "SMS_FAILED" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`[send-otp] OTP sent to ${normalizedPhone} (expires: ${expiresAt.toISOString()})`);
 
     // Return success
     return new Response(
       JSON.stringify({
         ok: true,
         expires_in: 300, // 5 minutes in seconds
-        // DEV ONLY: Include OTP in response for testing
-        // Remove this in production!
-        _dev_otp: otp,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

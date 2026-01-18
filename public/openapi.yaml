@@ -727,6 +727,13 @@ components:
       type: object
       required:
         - status
+      description: |
+        Résultat de classification ANTI-HALLUCINATION.
+        RÈGLES ABSOLUES:
+        - status=DONE: recommended_code ET evidence obligatoires
+        - status=NEED_INFO: next_question obligatoire
+        - status=ERROR: error_message obligatoire
+        - status=LOW_CONFIDENCE: recommended_code + evidence + warning
       properties:
         status:
           $ref: '#/components/schemas/ClassifyStatus'
@@ -734,7 +741,10 @@ components:
           type: string
           pattern: '^\d{10}$'
           nullable: true
-          description: Code HS 10 chiffres recommandé
+          description: |
+            Code HS 10 chiffres EXACTEMENT.
+            DOIT être issu de la liste candidates[] (jamais inventé).
+            NULL si status != DONE && status != LOW_CONFIDENCE
         confidence:
           type: number
           minimum: 0
@@ -745,26 +755,34 @@ components:
           $ref: '#/components/schemas/ConfidenceLevel'
         justification_short:
           type: string
+          maxLength: 500
           nullable: true
-          description: Justification courte de la classification
+          description: |
+            Justification UNIQUEMENT basée sur evidence[].
+            Ne doit contenir aucune information non présente dans les preuves.
         alternatives:
           type: array
           nullable: true
+          maxItems: 3
           items:
             $ref: '#/components/schemas/AlternativeCode'
-          description: Codes alternatifs possibles
+          description: Maximum 3 codes alternatifs (issus de candidates[])
         evidence:
           type: array
           nullable: true
+          minItems: 1
           items:
             $ref: '#/components/schemas/Evidence'
-          description: Preuves utilisées pour la classification
+          description: |
+            Preuves OBLIGATOIRES si status=DONE ou LOW_CONFIDENCE.
+            Toute classification sans preuve = BLOCKER.
         next_question:
           $ref: '#/components/schemas/NextQuestion'
         error_message:
           type: string
+          maxLength: 500
           nullable: true
-          description: Message d'erreur si status = ERROR
+          description: Message d'erreur OBLIGATOIRE si status=ERROR
 
     ClassificationResultSummary:
       type: object
@@ -841,35 +859,50 @@ components:
       type: object
       required:
         - code
+        - reason
+      description: Code alternatif issu de candidates[] uniquement
       properties:
         code:
           type: string
-          pattern: '^\d{6,10}$'
+          pattern: '^\d{10}$'
+          description: Code HS 10 chiffres (issu de candidates[])
         label:
           type: string
+          maxLength: 200
         confidence:
           type: number
           minimum: 0
           maximum: 1
         reason:
           type: string
-          description: Raison pour laquelle ce code est une alternative
+          maxLength: 200
+          description: Raison courte pour cette alternative
 
     Evidence:
       type: object
       required:
         - source
         - ref
-        - text
+        - excerpt
+      description: |
+        Preuve documentaire OBLIGATOIRE pour toute classification.
+        L'excerpt ne doit JAMAIS être inventé.
       properties:
         source:
           $ref: '#/components/schemas/EvidenceSource'
+        doc_id:
+          type: string
+          description: ID du document source dans kb_chunks
         ref:
           type: string
-          description: Référence du document
-        text:
+          maxLength: 100
+          description: Référence du document (ex. "Note Ch.84 [3]")
+        excerpt:
           type: string
-          description: Extrait du texte source
+          maxLength: 300
+          description: |
+            Extrait EXACT du texte source (max 300 chars).
+            NE DOIT JAMAIS être reformulé ou inventé.
         relevance_score:
           type: number
           minimum: 0
@@ -880,22 +913,42 @@ components:
       nullable: true
       required:
         - id
-        - text
+        - label
         - type
+      description: Question discriminante UNIQUE à poser
       properties:
         id:
           type: string
-          description: Identifiant unique de la question
-        text:
+          pattern: '^q_[a-z0-9_]+$'
+          description: Identifiant unique (format q_xxx)
+        label:
           type: string
-          description: Texte de la question à poser
+          maxLength: 300
+          description: Texte de la question
         type:
           $ref: '#/components/schemas/QuestionType'
         options:
           type: array
+          maxItems: 5
           items:
-            type: string
-          description: Options pour les questions de type select
+            $ref: '#/components/schemas/QuestionOption'
+          description: Options pour les questions select
+        required:
+          type: boolean
+          default: true
+
+    QuestionOption:
+      type: object
+      required:
+        - value
+        - label
+      properties:
+        value:
+          type: string
+          maxLength: 50
+        label:
+          type: string
+          maxLength: 200
 
     # ============= Export =============
     ExportPdfRequest:

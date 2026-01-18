@@ -79,48 +79,66 @@ export interface PresignResponse {
   expires_at: string;
 }
 
-// Classification Types
+// Classification Types - STRICT ANTI-HALLUCINATION
 export type ClassifyStatus = "NEED_INFO" | "DONE" | "ERROR" | "LOW_CONFIDENCE";
 export type ConfidenceLevel = "high" | "medium" | "low";
 export type EvidenceSource = "omd" | "maroc" | "lois" | "dum";
 export type QuestionType = "yesno" | "select" | "text";
 
 export interface Alternative {
-  code: string;
-  reason: string;
-  confidence: number;
+  code: string;        // 10 digits EXACTLY (from candidates[])
+  reason: string;      // Max 200 chars
+  confidence: number;  // 0-1
 }
 
 export interface EvidenceItem {
   source: EvidenceSource;
   doc_id: string;
-  ref: string;
-  excerpt: string;
+  ref: string;         // Max 100 chars
+  excerpt: string;     // Max 300 chars - NEVER fabricated
 }
 
 export interface QuestionOption {
-  value: string;
-  label: string;
+  value: string;       // Max 50 chars
+  label: string;       // Max 200 chars
 }
 
 export interface NextQuestion {
-  id: string;
-  label: string;
+  id: string;          // Format: q_xxx
+  label: string;       // Max 300 chars
   type: QuestionType;
   options?: QuestionOption[];
   required: boolean;
 }
 
+/**
+ * HSResult - ANTI-HALLUCINATION RULES:
+ * 
+ * status=DONE: 
+ *   - recommended_code REQUIRED (10 digits)
+ *   - evidence REQUIRED (non-empty)
+ *   - justification_short based ONLY on evidence
+ * 
+ * status=NEED_INFO:
+ *   - next_question REQUIRED
+ *   - recommended_code should NOT be displayed
+ * 
+ * status=ERROR:
+ *   - error_message REQUIRED
+ * 
+ * status=LOW_CONFIDENCE:
+ *   - Same as DONE + warning display
+ */
 export interface HSResult {
   status: ClassifyStatus;
-  recommended_code: string | null;
-  confidence: number;
+  recommended_code: string | null;  // 10 digits or null
+  confidence: number;               // 0-1
   confidence_level: ConfidenceLevel;
-  justification_short: string;
-  alternatives: Alternative[];
-  evidence: EvidenceItem[];
+  justification_short: string;      // Max 500 chars
+  alternatives: Alternative[];      // Max 3 items
+  evidence: EvidenceItem[];         // REQUIRED if status=DONE|LOW_CONFIDENCE
   next_question: NextQuestion | null;
-  error_message: string | null;
+  error_message: string | null;     // REQUIRED if status=ERROR
 }
 
 // Audit Types

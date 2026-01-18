@@ -217,6 +217,194 @@ export type Database = {
         }
         Relationships: []
       }
+      dum_records: {
+        Row: {
+          attachments: Json | null
+          company_id: string
+          created_at: string
+          dum_date: string
+          dum_number: string | null
+          hs_code_10: string
+          id: string
+          origin_country: string
+          product_description: string
+          reliability_score: number | null
+          validated_at: string | null
+          validated_by: string | null
+        }
+        Insert: {
+          attachments?: Json | null
+          company_id: string
+          created_at?: string
+          dum_date: string
+          dum_number?: string | null
+          hs_code_10: string
+          id?: string
+          origin_country: string
+          product_description: string
+          reliability_score?: number | null
+          validated_at?: string | null
+          validated_by?: string | null
+        }
+        Update: {
+          attachments?: Json | null
+          company_id?: string
+          created_at?: string
+          dum_date?: string
+          dum_number?: string | null
+          hs_code_10?: string
+          id?: string
+          origin_country?: string
+          product_description?: string
+          reliability_score?: number | null
+          validated_at?: string | null
+          validated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dum_records_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      finance_law_articles: {
+        Row: {
+          created_at: string
+          effective_date: string | null
+          id: string
+          keywords: Json | null
+          ref: string
+          text: string
+          title: string | null
+          version_label: string
+        }
+        Insert: {
+          created_at?: string
+          effective_date?: string | null
+          id?: string
+          keywords?: Json | null
+          ref: string
+          text: string
+          title?: string | null
+          version_label: string
+        }
+        Update: {
+          created_at?: string
+          effective_date?: string | null
+          id?: string
+          keywords?: Json | null
+          ref?: string
+          text?: string
+          title?: string | null
+          version_label?: string
+        }
+        Relationships: []
+      }
+      hs_codes: {
+        Row: {
+          active_version_label: string
+          chapter_2: string
+          code_10: string
+          code_6: string
+          created_at: string
+          label_ar: string | null
+          label_fr: string
+          restrictions: string[] | null
+          taxes: Json | null
+          unit: string | null
+          updated_at: string
+        }
+        Insert: {
+          active_version_label: string
+          chapter_2: string
+          code_10: string
+          code_6: string
+          created_at?: string
+          label_ar?: string | null
+          label_fr: string
+          restrictions?: string[] | null
+          taxes?: Json | null
+          unit?: string | null
+          updated_at?: string
+        }
+        Update: {
+          active_version_label?: string
+          chapter_2?: string
+          code_10?: string
+          code_6?: string
+          created_at?: string
+          label_ar?: string | null
+          label_fr?: string
+          restrictions?: string[] | null
+          taxes?: Json | null
+          unit?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      hs_omd_notes: {
+        Row: {
+          created_at: string
+          hs_code: string
+          hs_level: string
+          id: string
+          ref: string
+          text: string
+          version_label: string
+        }
+        Insert: {
+          created_at?: string
+          hs_code: string
+          hs_level: string
+          id?: string
+          ref: string
+          text: string
+          version_label: string
+        }
+        Update: {
+          created_at?: string
+          hs_code?: string
+          hs_level?: string
+          id?: string
+          ref?: string
+          text?: string
+          version_label?: string
+        }
+        Relationships: []
+      }
+      hs_references: {
+        Row: {
+          created_at: string
+          id: string
+          note: string | null
+          reference_type: string
+          source_code: string
+          target_code: string
+          version_label: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          note?: string | null
+          reference_type: string
+          source_code: string
+          target_code: string
+          version_label: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          note?: string | null
+          reference_type?: string
+          source_code?: string
+          target_code?: string
+          version_label?: string
+        }
+        Relationships: []
+      }
       ingestion_files: {
         Row: {
           created_at: string

@@ -221,35 +221,61 @@ export async function exportPdf(caseId: string) {
   });
 }
 
-// Admin endpoints
-export async function getIngestionList() {
-  return api.get("/admin/ingestion/list");
+// Admin endpoints - call edge function directly
+const adminHeaders = () => {
+  const token = localStorage.getItem("auth_token");
+  return {
+    "Content-Type": "application/json",
+    "apikey": SUPABASE_ANON_KEY,
+    "Authorization": token ? `Bearer ${token}` : "",
+  };
+};
+
+export async function getIngestionList(params?: { limit?: number; offset?: number; status?: string; source?: string }) {
+  return axios.get(`${FUNCTIONS_URL}/admin/ingestion/list`, {
+    params,
+    headers: adminHeaders(),
+  });
 }
 
 export async function registerIngestion(data: {
   source: string;
   version_label: string;
   file_url: string;
+  filename?: string;
 }) {
-  return api.post("/admin/ingestion/register", data);
+  return axios.post(`${FUNCTIONS_URL}/admin/ingestion/register`, data, {
+    headers: adminHeaders(),
+  });
 }
 
 export async function runEtl(ingestionId: string) {
-  return api.post("/admin/etl/run", { ingestion_id: ingestionId });
+  return axios.post(`${FUNCTIONS_URL}/admin/etl/run`, { ingestion_id: ingestionId }, {
+    headers: adminHeaders(),
+  });
 }
 
 export async function getIngestionLogs(ingestionId: string) {
-  return api.get(`/admin/ingestion/${ingestionId}/logs`);
+  return axios.get(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/logs`, {
+    headers: adminHeaders(),
+  });
 }
 
 export async function retryIngestion(ingestionId: string) {
-  return api.post(`/admin/ingestion/${ingestionId}/retry`);
+  return axios.post(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/retry`, {}, {
+    headers: adminHeaders(),
+  });
 }
 
 export async function disableIngestion(ingestionId: string) {
-  return api.post(`/admin/ingestion/${ingestionId}/disable`);
+  return axios.post(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/disable`, {}, {
+    headers: adminHeaders(),
+  });
 }
 
-export async function searchKB(q: string) {
-  return api.get("/admin/kb/search", { params: { q } });
+export async function searchKB(q: string, params?: { limit?: number; source?: string }) {
+  return axios.get(`${FUNCTIONS_URL}/admin/kb/search`, {
+    params: { q, ...params },
+    headers: adminHeaders(),
+  });
 }

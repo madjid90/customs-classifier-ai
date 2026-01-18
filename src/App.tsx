@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { lazy, Suspense } from "react";
 import LoginPage from "@/pages/Login";
 import DashboardPage from "@/pages/Dashboard";
 import NewCasePage from "@/pages/NewCase";
@@ -12,6 +13,9 @@ import ResultPage from "@/pages/ResultPage";
 import HistoryPage from "@/pages/History";
 import AdminPage from "@/pages/Admin";
 import NotFound from "@/pages/NotFound";
+
+// Dev-only lazy import
+const DevOpenApiCheck = lazy(() => import("@/pages/DevOpenApiCheck"));
 
 const queryClient = new QueryClient();
 
@@ -31,6 +35,13 @@ const App = () => (
             <Route path="/cases/:caseId/result" element={<ResultPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            {import.meta.env.DEV && (
+              <Route path="/dev/openapi-check" element={
+                <Suspense fallback={<div className="p-8">Loading...</div>}>
+                  <DevOpenApiCheck />
+                </Suspense>
+              } />
+            )}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

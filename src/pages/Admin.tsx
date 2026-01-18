@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { IngestionStatusBadge } from "@/components/ui/status-badge";
+import { HSCodeImport } from "@/components/admin/HSCodeImport";
 import { 
   getIngestionList, 
   registerIngestion, 
@@ -37,7 +38,8 @@ import {
   FileText,
   AlertCircle,
   CheckCircle,
-  Activity
+  Activity,
+  BookOpen
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -231,10 +233,14 @@ export default function AdminPage() {
 
         <div className="mt-6">
           <Tabs defaultValue="home">
-            <TabsList className="mb-6">
+            <TabsList className="mb-6 flex-wrap">
               <TabsTrigger value="home" className="flex items-center gap-2">
                 <Activity className="h-4 w-4" />
                 Accueil
+              </TabsTrigger>
+              <TabsTrigger value="nomenclature" className="flex items-center gap-2">
+                <BookOpen className="h-4 w-4" />
+                Nomenclature
               </TabsTrigger>
               <TabsTrigger value="new" className="flex items-center gap-2">
                 <Upload className="h-4 w-4" />
@@ -301,6 +307,11 @@ export default function AdminPage() {
                   </div>
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            {/* Nomenclature Tab */}
+            <TabsContent value="nomenclature">
+              <HSCodeImport />
             </TabsContent>
 
             {/* New Import Tab */}

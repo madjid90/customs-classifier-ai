@@ -51,3 +51,6 @@ verify_jwt = false
 
 [functions.admin]
 verify_jwt = false
+
+[functions.admin-import-hs]
+verify_jwt = false

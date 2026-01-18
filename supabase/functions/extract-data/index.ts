@@ -1,5 +1,35 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ============================================================================
+// CONDITIONAL LOGGER
+// ============================================================================
+
+const IS_PRODUCTION = Deno.env.get("ENVIRONMENT") === "production";
+
+const logger = {
+  debug: (...args: unknown[]) => {
+    if (!IS_PRODUCTION) console.log("[DEBUG]", ...args);
+  },
+  info: (...args: unknown[]) => {
+    console.log("[INFO]", ...args);
+  },
+  warn: (...args: unknown[]) => {
+    console.warn("[WARN]", ...args);
+  },
+  error: (...args: unknown[]) => {
+    console.error("[ERROR]", ...args);
+  },
+  metric: (name: string, value: number, tags?: Record<string, string>) => {
+    console.log(JSON.stringify({
+      type: "metric",
+      name,
+      value,
+      tags,
+      timestamp: new Date().toISOString(),
+    }));
+  },
+};
+
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
   "https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app",
@@ -128,7 +158,7 @@ RETOURNE un tableau JSON avec la structure:
 async function callOpenAI(systemPrompt: string, userContent: string): Promise<string> {
   const config = getOpenAIConfig();
 
-  console.log(`[extract-data] Calling OpenAI ${config.modelReasoning}...`);
+  logger.debug(`[extract-data] Calling OpenAI ${config.modelReasoning}...`);
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -171,7 +201,7 @@ async function callOpenAI(systemPrompt: string, userContent: string): Promise<st
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error("[extract-data] OpenAI error:", response.status, errorText);
+    logger.error("[extract-data] OpenAI error:", response.status, errorText);
     
     if (response.status === 429) {
       throw new Error("Limite de requêtes OpenAI dépassée. Réessayez plus tard.");
@@ -212,7 +242,7 @@ function parseAIResponse<T>(response: string): T[] {
     }
     return [];
   } catch (e) {
-    console.error("[extract-data] Parse error:", e);
+    logger.error("[extract-data] Parse error:", e);
     // Try to extract JSON array from response
     const match = response.match(/\[[\s\S]*\]/);
     if (match) {
@@ -307,7 +337,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`[extract-data] Processing ${type} extraction, content length: ${content.length}`);
+    logger.info(`[extract-data] Processing ${type} extraction, content length: ${content.length}`);
 
     // Split content into chunks if too large (max ~15000 chars per request)
     const MAX_CHUNK_SIZE = 15000;
@@ -333,7 +363,7 @@ Deno.serve(async (req) => {
       contentChunks.push(content);
     }
 
-    console.log(`[extract-data] Split into ${contentChunks.length} chunks`);
+    logger.debug(`[extract-data] Split into ${contentChunks.length} chunks`);
 
     const systemPrompt = SYSTEM_PROMPTS[type];
     let allResults: any[] = [];
@@ -342,16 +372,16 @@ Deno.serve(async (req) => {
     // Process each chunk
     for (let i = 0; i < contentChunks.length; i++) {
       try {
-        console.log(`[extract-data] Processing chunk ${i + 1}/${contentChunks.length}`);
+        logger.debug(`[extract-data] Processing chunk ${i + 1}/${contentChunks.length}`);
         
         const aiResponse = await callOpenAI(systemPrompt, contentChunks[i]);
         const chunkResults = parseAIResponse(aiResponse);
         
-        console.log(`[extract-data] Chunk ${i + 1} extracted ${chunkResults.length} items`);
+        logger.debug(`[extract-data] Chunk ${i + 1} extracted ${chunkResults.length} items`);
         allResults = allResults.concat(chunkResults);
       } catch (e) {
         const errorMsg = e instanceof Error ? e.message : "Erreur inconnue";
-        console.error(`[extract-data] Chunk ${i + 1} error:`, errorMsg);
+        logger.error(`[extract-data] Chunk ${i + 1} error:`, errorMsg);
         errors.push(`Chunk ${i + 1}: ${errorMsg}`);
       }
     }
@@ -430,7 +460,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log(`[extract-data] Extraction complete: ${validCount} valid, ${invalidCount} invalid`);
+    logger.info(`[extract-data] Extraction complete: ${validCount} valid, ${invalidCount} invalid`);
 
     return new Response(
       JSON.stringify({
@@ -449,7 +479,7 @@ Deno.serve(async (req) => {
     );
 
   } catch (error) {
-    console.error("[extract-data] Error:", error);
+    logger.error("[extract-data] Error:", error);
     return new Response(
       JSON.stringify({ 
         message: error instanceof Error ? error.message : "Erreur serveur",

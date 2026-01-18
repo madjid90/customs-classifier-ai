@@ -1,5 +1,35 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ============================================================================
+// CONDITIONAL LOGGER
+// ============================================================================
+
+const IS_PRODUCTION = Deno.env.get("ENVIRONMENT") === "production";
+
+const logger = {
+  debug: (...args: unknown[]) => {
+    if (!IS_PRODUCTION) console.log("[DEBUG]", ...args);
+  },
+  info: (...args: unknown[]) => {
+    console.log("[INFO]", ...args);
+  },
+  warn: (...args: unknown[]) => {
+    console.warn("[WARN]", ...args);
+  },
+  error: (...args: unknown[]) => {
+    console.error("[ERROR]", ...args);
+  },
+  metric: (name: string, value: number, tags?: Record<string, string>) => {
+    console.log(JSON.stringify({
+      type: "metric",
+      name,
+      value,
+      tags,
+      timestamp: new Date().toISOString(),
+    }));
+  },
+};
+
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
   "https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app",
@@ -54,7 +84,7 @@ Deno.serve(async (req) => {
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
     if (authError || !user) {
-      console.error("Auth error:", authError);
+      logger.error("Auth error:", authError);
       return new Response(
         JSON.stringify({ error: "Invalid token" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -86,7 +116,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`Generating PDF for case: ${caseId}`);
+    logger.info(`Generating PDF for case: ${caseId}`);
 
     // Get user's company
     const { data: profile, error: profileError } = await supabase
@@ -96,7 +126,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (profileError || !profile) {
-      console.error("Profile error:", profileError);
+      logger.error("Profile error:", profileError);
       return new Response(
         JSON.stringify({ error: "User profile not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -112,7 +142,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (caseError || !caseData) {
-      console.error("Case error:", caseError);
+      logger.error("Case error:", caseError);
       return new Response(
         JSON.stringify({ error: "Case not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -137,7 +167,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (classError || !classificationData) {
-      console.error("Classification error:", classError);
+      logger.error("Classification error:", classError);
       return new Response(
         JSON.stringify({ error: "Classification result not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -183,7 +213,7 @@ Deno.serve(async (req) => {
       meta: { format: "pdf", timestamp: new Date().toISOString() },
     });
 
-    console.log(`PDF generated successfully for case: ${caseId}`);
+    logger.info(`PDF generated successfully for case: ${caseId}`);
 
     // Return HTML that can be printed as PDF
     return new Response(html, {
@@ -195,7 +225,7 @@ Deno.serve(async (req) => {
     });
 
   } catch (err) {
-    console.error("Export PDF error:", err);
+    logger.error("Export PDF error:", err);
     const errorMessage = err instanceof Error ? err.message : "Internal server error";
     return new Response(
       JSON.stringify({ error: errorMessage }),

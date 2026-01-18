@@ -1,5 +1,35 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ============================================================================
+// CONDITIONAL LOGGER
+// ============================================================================
+
+const IS_PRODUCTION = Deno.env.get("ENVIRONMENT") === "production";
+
+const logger = {
+  debug: (...args: unknown[]) => {
+    if (!IS_PRODUCTION) console.log("[DEBUG]", ...args);
+  },
+  info: (...args: unknown[]) => {
+    console.log("[INFO]", ...args);
+  },
+  warn: (...args: unknown[]) => {
+    console.warn("[WARN]", ...args);
+  },
+  error: (...args: unknown[]) => {
+    console.error("[ERROR]", ...args);
+  },
+  metric: (name: string, value: number, tags?: Record<string, string>) => {
+    console.log(JSON.stringify({
+      type: "metric",
+      name,
+      value,
+      tags,
+      timestamp: new Date().toISOString(),
+    }));
+  },
+};
+
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
   "https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app",
@@ -158,7 +188,7 @@ Deno.serve(async (req) => {
         );
       }
 
-      console.log(`[import-hs] Starting import, format: ${format}, version: ${version_label}, mode: ${mode}`);
+      logger.info(`[import-hs] Starting import, format: ${format}, version: ${version_label}, mode: ${mode}`);
       
       let rows: Record<string, string>[] = [];
       
@@ -181,7 +211,7 @@ Deno.serve(async (req) => {
         );
       }
 
-      console.log(`[import-hs] Parsed ${rows.length} rows`);
+      logger.debug(`[import-hs] Parsed ${rows.length} rows`);
 
       const result: ImportResult = {
         total_rows: rows.length,
@@ -217,7 +247,7 @@ Deno.serve(async (req) => {
             .upsert(batch, { onConflict: "code_10" });
           
           if (upsertError) {
-            console.error(`[import-hs] Batch error:`, upsertError);
+            logger.error(`[import-hs] Batch error:`, upsertError);
             result.errors += batch.length;
             result.warnings.push(`Erreur batch ${i}: ${upsertError.message}`);
           } else {
@@ -229,7 +259,7 @@ Deno.serve(async (req) => {
             .insert(batch);
           
           if (insertError) {
-            console.error(`[import-hs] Insert error:`, insertError);
+            logger.error(`[import-hs] Insert error:`, insertError);
             result.errors += batch.length;
             if (insertError.message.includes("duplicate")) {
               result.warnings.push(`Codes dupliques ignores dans batch ${i}`);
@@ -242,7 +272,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      console.log(`[import-hs] Import complete:`, result);
+      logger.info(`[import-hs] Import complete:`, result);
 
       return new Response(
         JSON.stringify(result),
@@ -304,7 +334,7 @@ Deno.serve(async (req) => {
       const { data: codes, count, error } = await queryBuilder.limit(limit);
 
       if (error) {
-        console.error("[import-hs] Search error:", error);
+        logger.error("[import-hs] Search error:", error);
         return new Response(
           JSON.stringify({ message: error.message }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -352,7 +382,7 @@ Deno.serve(async (req) => {
     );
 
   } catch (error) {
-    console.error("[import-hs] Error:", error);
+    logger.error("[import-hs] Error:", error);
     return new Response(
       JSON.stringify({ message: error instanceof Error ? error.message : "Erreur serveur" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

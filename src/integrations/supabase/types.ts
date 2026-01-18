@@ -681,6 +681,42 @@ export type Database = {
         }
         Relationships: []
       }
+      security_logs: {
+        Row: {
+          attempted_path: string
+          created_at: string
+          event_type: string
+          id: string
+          ip_address: string | null
+          meta: Json | null
+          user_agent: string | null
+          user_id: string | null
+          user_phone: string | null
+        }
+        Insert: {
+          attempted_path: string
+          created_at?: string
+          event_type: string
+          id?: string
+          ip_address?: string | null
+          meta?: Json | null
+          user_agent?: string | null
+          user_id?: string | null
+          user_phone?: string | null
+        }
+        Update: {
+          attempted_path?: string
+          created_at?: string
+          event_type?: string
+          id?: string
+          ip_address?: string | null
+          meta?: Json | null
+          user_agent?: string | null
+          user_id?: string | null
+          user_phone?: string | null
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           id: string

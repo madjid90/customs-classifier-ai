@@ -1,6 +1,7 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useRef } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSecurityLog } from "@/hooks/useSecurityLog";
 import { Loader2 } from "lucide-react";
 
 type UserRole = "admin" | "agent" | "manager";
@@ -14,7 +15,8 @@ interface ProtectedRouteProps {
 /**
  * ProtectedRoute component that guards authenticated routes.
  * - Redirects to /login if user is not authenticated
- * - Redirects to /dashboard if user doesn't have required role
+ * - Redirects to /403 if user doesn't have required role
+ * - Logs unauthorized and forbidden access attempts
  * - Shows loading spinner while checking auth state
  */
 export function ProtectedRoute({ 
@@ -24,6 +26,28 @@ export function ProtectedRoute({
 }: ProtectedRouteProps) {
   const { isAuthenticated, isLoading, hasRole } = useAuth();
   const location = useLocation();
+  const { logUnauthorizedAccess, logForbiddenAccess } = useSecurityLog();
+  
+  // Track if we've already logged this access attempt
+  const hasLoggedRef = useRef(false);
+
+  // Log unauthorized access attempts
+  useEffect(() => {
+    if (isLoading || hasLoggedRef.current) return;
+
+    if (!isAuthenticated) {
+      hasLoggedRef.current = true;
+      logUnauthorizedAccess(location.pathname);
+    } else if (allowedRoles && !hasRole(allowedRoles)) {
+      hasLoggedRef.current = true;
+      logForbiddenAccess(location.pathname, allowedRoles);
+    }
+  }, [isLoading, isAuthenticated, allowedRoles, hasRole, location.pathname, logUnauthorizedAccess, logForbiddenAccess]);
+
+  // Reset log tracking when path changes
+  useEffect(() => {
+    hasLoggedRef.current = false;
+  }, [location.pathname]);
 
   // Show loading spinner while checking authentication
   if (isLoading) {

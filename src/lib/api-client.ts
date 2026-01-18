@@ -223,6 +223,10 @@ export async function uploadAndAttachFile(caseId: string, file: File, fileType: 
 }
 
 // Classification endpoint - call edge function directly
+// ANTI-HALLUCINATION: Response is validated before being returned
+import { validateClassifyResponse, formatValidationErrors, canDisplayResult } from "./classify-validator";
+import type { HSResult } from "./types";
+
 export async function classify(payload: {
   case_id: string;
   file_urls: string[];
@@ -231,15 +235,51 @@ export async function classify(payload: {
     type_import_export: "import" | "export";
     origin_country: string;
   };
-}) {
-  return axios.post(`${FUNCTIONS_URL}/classify`, payload, {
+}): Promise<{ data: HSResult }> {
+  const token = localStorage.getItem("auth_token");
+  
+  const response = await axios.post(`${FUNCTIONS_URL}/classify`, payload, {
     timeout: 120000,
     headers: {
       "Content-Type": "application/json",
       "apikey": SUPABASE_ANON_KEY,
+      "Authorization": token ? `Bearer ${token}` : "",
     },
   });
+
+  // ===== ANTI-HALLUCINATION VALIDATION =====
+  const validation = validateClassifyResponse(response.data);
+  
+  if (!validation.valid) {
+    console.error("[ANTI-HALLUCINATION] Classification response validation FAILED:");
+    console.error(formatValidationErrors(validation));
+    
+    // Return ERROR status instead of invalid response
+    const errorResult: HSResult = {
+      status: "ERROR",
+      recommended_code: null,
+      confidence: 0,
+      confidence_level: "low",
+      justification_short: "",
+      alternatives: [],
+      evidence: [],
+      next_question: null,
+      error_message: `Validation échouée: ${validation.errors[0] || "Réponse non conforme"}`,
+    };
+    
+    return { data: errorResult };
+  }
+
+  if (validation.warnings.length > 0) {
+    console.warn("[ANTI-HALLUCINATION] Classification response warnings:");
+    console.warn(formatValidationErrors(validation));
+  }
+
+  return { data: validation.sanitizedResult! };
 }
+
+// Export validation utility for use in components
+export { canDisplayResult };
 
 // Export endpoint - call edge function directly
 export async function exportPdf(caseId: string) {

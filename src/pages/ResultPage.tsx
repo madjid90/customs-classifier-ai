@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge, ConfidenceBadge } from "@/components/ui/status-badge";
-import { getCaseDetail, validateCase, exportPdf } from "@/lib/api-client";
+import { getCaseDetail, validateCase, exportPdf, canDisplayResult } from "@/lib/api-client";
 import { CaseDetailResponse, EvidenceItem, Alternative, INGESTION_SOURCE_LABELS } from "@/lib/types";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -20,7 +20,9 @@ import {
   Package,
   ExternalLink,
   Wifi,
-  WifiOff
+  WifiOff,
+  RefreshCw,
+  XCircle
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { toast as sonnerToast } from "sonner";
@@ -307,6 +309,8 @@ export default function ResultPage() {
     );
   }
 
+  // ===== ANTI-HALLUCINATION UI RULES =====
+  // RULE: Never display result without evidence
   if (!caseData || !caseData.last_result) {
     return (
       <AppLayout>
@@ -324,6 +328,73 @@ export default function ResultPage() {
   }
 
   const result = caseData.last_result;
+  
+  // ===== STATUS-BASED UI RENDERING =====
+  // ERROR: Show error message + retry button
+  if (result.status === "ERROR") {
+    return (
+      <AppLayout>
+        <div className="container py-8">
+          <Breadcrumbs
+            items={[
+              { label: "Dossiers", href: "/history" },
+              { label: caseData.case.product_name.slice(0, 30) },
+            ]}
+          />
+          <Card className="mt-6 border-destructive/50 bg-destructive/5">
+            <CardContent className="flex flex-col items-center py-12">
+              <XCircle className="h-12 w-12 text-destructive" />
+              <p className="mt-4 text-lg font-medium text-destructive">Erreur de classification</p>
+              <p className="mt-2 text-sm text-muted-foreground text-center max-w-md">
+                {result.error_message || "Une erreur s'est produite lors de l'analyse."}
+              </p>
+              <Button className="mt-6" onClick={() => navigate(`/cases/${caseId}/analyze`)}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Réessayer l'analyse
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  // NEED_INFO: Should not reach this page - redirect to analyze
+  if (result.status === "NEED_INFO") {
+    navigate(`/cases/${caseId}/analyze`);
+    return null;
+  }
+
+  // ANTI-HALLUCINATION: Never display code without evidence
+  if (!canDisplayResult(result)) {
+    return (
+      <AppLayout>
+        <div className="container py-8">
+          <Breadcrumbs
+            items={[
+              { label: "Dossiers", href: "/history" },
+              { label: caseData.case.product_name.slice(0, 30) },
+            ]}
+          />
+          <Card className="mt-6 border-warning/50 bg-warning/5">
+            <CardContent className="flex flex-col items-center py-12">
+              <AlertTriangle className="h-12 w-12 text-warning" />
+              <p className="mt-4 text-lg font-medium text-warning">Résultat non affichable</p>
+              <p className="mt-2 text-sm text-muted-foreground text-center max-w-md">
+                La classification n'a pas pu être vérifiée car aucune preuve documentaire n'est disponible.
+                Veuillez ajouter des documents supplémentaires pour obtenir une classification fiable.
+              </p>
+              <Button className="mt-6" onClick={() => navigate(`/cases/${caseId}/analyze`)}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Ajouter des documents
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </AppLayout>
+    );
+  }
+
   const canValidate = hasRole(["admin", "manager"]) && caseData.case.status === "RESULT_READY";
 
   return (
@@ -363,8 +434,8 @@ export default function ResultPage() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">
-                {/* Main Code - R1: Only display if evidence exists */}
-                {result.recommended_code && result.evidence && result.evidence.length > 0 && (
+                {/* Main Code - Only displayed if canDisplayResult passed */}
+                {result.recommended_code && (
                   <div className="rounded-lg border bg-muted/30 p-6 text-center">
                     <p className="text-sm text-muted-foreground mb-2">Code SH / Nomenclature Maroc</p>
                     <p className="hs-code text-3xl text-primary">
@@ -373,17 +444,6 @@ export default function ResultPage() {
                     <div className="mt-3 flex items-center justify-center gap-2">
                       <ConfidenceBadge level={result.confidence_level} percentage={result.confidence} />
                     </div>
-                  </div>
-                )}
-
-                {/* R1: No code display without evidence */}
-                {result.recommended_code && (!result.evidence || result.evidence.length === 0) && result.status !== "ERROR" && (
-                  <div className="rounded-lg border border-warning/50 bg-warning/5 p-6 text-center">
-                    <AlertTriangle className="h-8 w-8 text-warning mx-auto mb-2" />
-                    <p className="font-medium text-warning">Résultat non affichable</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Aucune preuve documentaire disponible. Ajoutez des documents supplémentaires pour obtenir une classification fiable.
-                    </p>
                   </div>
                 )}
 

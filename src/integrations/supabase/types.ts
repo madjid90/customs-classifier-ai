@@ -704,6 +704,15 @@ export type Database = {
           need_info_count: number
         }[]
       }
+      get_dum_signal: {
+        Args: { p_company_id: string; p_keywords: string[]; p_limit?: number }
+        Returns: {
+          avg_reliability: number
+          hs_code_10: string
+          latest_date: string
+          match_count: number
+        }[]
+      }
       get_evidence_stats: {
         Args: never
         Returns: {
@@ -711,18 +720,7 @@ export type Database = {
           usage_count: number
         }[]
       }
-      get_ingestion_stats: {
-        Args: never
-        Returns: {
-          active_hs_codes: number
-          kb_chunks_with_embeddings: number
-          total_ambiguities: number
-          total_dum_records: number
-          total_hs_codes: number
-          total_kb_chunks: number
-          unresolved_ambiguities: number
-        }[]
-      }
+      get_ingestion_stats: { Args: never; Returns: Json }
       get_user_company_id: { Args: { _user_id: string }; Returns: string }
       has_role: {
         Args: {
@@ -740,13 +738,13 @@ export type Database = {
         Returns: {
           chapter_2: string
           code_10: string
-          code_4: string
           code_6: string
           enrichment: Json
           label_ar: string
           label_fr: string
           similarity: number
           taxes: Json
+          unit: string
         }[]
       }
       match_kb_chunks: {
@@ -759,9 +757,10 @@ export type Database = {
         Returns: {
           doc_id: string
           id: string
+          metadata: Json
           ref: string
           similarity: number
-          source: Database["public"]["Enums"]["ingestion_source"]
+          source: string
           text: string
           version_label: string
         }[]

@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { IngestionStatusBadge } from "@/components/ui/status-badge";
 import { HSCodeImport } from "@/components/admin/HSCodeImport";
+import { DUMImport } from "@/components/admin/DUMImport";
 import { 
   getIngestionList, 
   registerIngestion, 
@@ -39,7 +40,8 @@ import {
   AlertCircle,
   CheckCircle,
   Activity,
-  BookOpen
+  BookOpen,
+  ClipboardList
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -253,6 +255,10 @@ export default function AdminPage() {
               <TabsTrigger value="kb" className="flex items-center gap-2">
                 <Search className="h-4 w-4" />
                 Qualite KB
+              </TabsTrigger>
+              <TabsTrigger value="dum" className="flex items-center gap-2">
+                <ClipboardList className="h-4 w-4" />
+                DUM
               </TabsTrigger>
             </TabsList>
 
@@ -521,6 +527,11 @@ export default function AdminPage() {
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            {/* DUM Import Tab */}
+            <TabsContent value="dum">
+              <DUMImport />
             </TabsContent>
           </Tabs>
         </div>

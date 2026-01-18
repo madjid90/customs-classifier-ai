@@ -8,6 +8,7 @@ import { StatusBadge, ConfidenceBadge } from "@/components/ui/status-badge";
 import { getCaseDetail, validateCase, exportPdf } from "@/lib/api-client";
 import { CaseDetailResponse, EvidenceItem, Alternative, INGESTION_SOURCE_LABELS } from "@/lib/types";
 import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
 import { 
   Loader2, 
   Copy, 
@@ -16,9 +17,12 @@ import {
   AlertTriangle,
   FileText,
   Package,
-  ExternalLink
+  ExternalLink,
+  Wifi,
+  WifiOff
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { toast as sonnerToast } from "sonner";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 
@@ -32,6 +36,7 @@ export default function ResultPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isValidating, setIsValidating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
 
   useEffect(() => {
     async function fetchCase() {
@@ -58,6 +63,54 @@ export default function ResultPage() {
     }
     fetchCase();
   }, [caseId, navigate, toast]);
+
+  // Realtime subscription for case status updates
+  useEffect(() => {
+    if (!caseId) return;
+
+    const channel = supabase
+      .channel(`result-case-${caseId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'cases',
+          filter: `id=eq.${caseId}`,
+        },
+        async (payload) => {
+          const newCase = payload.new as any;
+          
+          // Update case data
+          setCaseData(prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              case: {
+                ...prev.case,
+                status: newCase.status,
+                validated_at: newCase.validated_at,
+                validated_by: newCase.validated_by,
+              }
+            };
+          });
+
+          // Show notification for validation
+          if (newCase.status === 'VALIDATED' && newCase.validated_at) {
+            sonnerToast.success("Dossier validé", {
+              description: "Ce dossier a été validé avec succès.",
+            });
+          }
+        }
+      )
+      .subscribe((status) => {
+        setRealtimeConnected(status === 'SUBSCRIBED');
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [caseId]);
 
   const handleCopyCode = () => {
     if (caseData?.last_result?.recommended_code) {
@@ -177,7 +230,14 @@ export default function ResultPage() {
                       </CardDescription>
                     </div>
                   </div>
-                  <StatusBadge status={caseData.case.status} />
+                  <div className="flex items-center gap-2">
+                    {realtimeConnected ? (
+                      <Wifi className="h-4 w-4 text-green-500" />
+                    ) : (
+                      <WifiOff className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <StatusBadge status={caseData.case.status} />
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">

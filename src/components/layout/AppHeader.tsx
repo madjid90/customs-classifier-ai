@@ -16,7 +16,8 @@ import {
   LogOut,
   User,
   Menu,
-  X
+  X,
+  Activity
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -25,6 +26,11 @@ const navItems = [
   { label: "Tableau de bord", href: "/dashboard", icon: LayoutDashboard },
   { label: "Nouveau dossier", href: "/cases/new", icon: FolderPlus },
   { label: "Historique", href: "/history", icon: History },
+];
+
+const adminNavItems = [
+  { label: "Admin", href: "/admin", icon: Settings },
+  { label: "Monitoring", href: "/monitoring", icon: Activity },
 ];
 
 export function AppHeader() {
@@ -72,20 +78,24 @@ export function AppHeader() {
               </Link>
             );
           })}
-          {hasRole("admin") && (
-            <Link
-              to="/admin"
-              className={cn(
-                "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                location.pathname.startsWith("/admin")
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-              )}
-            >
-              <Settings className="h-4 w-4" />
-              Admin
-            </Link>
-          )}
+          {hasRole("admin") && adminNavItems.map((item) => {
+            const isActive = location.pathname.startsWith(item.href);
+            return (
+              <Link
+                key={item.href}
+                to={item.href}
+                className={cn(
+                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  isActive
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                )}
+              >
+                <item.icon className="h-4 w-4" />
+                {item.label}
+              </Link>
+            );
+          })}
         </nav>
 
         {/* User Menu */}
@@ -148,21 +158,25 @@ export function AppHeader() {
                 </Link>
               );
             })}
-            {hasRole("admin") && (
-              <Link
-                to="/admin"
-                onClick={() => setMobileMenuOpen(false)}
-                className={cn(
-                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  location.pathname.startsWith("/admin")
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50"
-                )}
-              >
-                <Settings className="h-4 w-4" />
-                Admin
-              </Link>
-            )}
+            {hasRole("admin") && adminNavItems.map((item) => {
+              const isActive = location.pathname.startsWith(item.href);
+              return (
+                <Link
+                  key={item.href}
+                  to={item.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={cn(
+                    "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    isActive
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50"
+                  )}
+                >
+                  <item.icon className="h-4 w-4" />
+                  {item.label}
+                </Link>
+              );
+            })}
             <div className="my-2 border-t border-sidebar-border" />
             <div className="flex items-center justify-between px-3 py-2 text-sm text-sidebar-foreground/80">
               <span>{user?.phone}</span>

@@ -2,6 +2,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { logger } from "../_shared/logger.ts";
 import { corsHeaders } from "../_shared/cors.ts";
+import { 
+  createBackgroundTask, 
+  updateTaskProgress, 
+  completeTask, 
+  failTask,
+  type TaskType 
+} from "../_shared/background-tasks.ts";
 
 // ============================================================================
 // CONFIGURATION
@@ -266,6 +273,7 @@ Deno.serve(async (req) => {
       }
 
       const config = getConfig();
+      const taskType: TaskType = target === "kb" ? "embeddings_kb" : "embeddings_hs";
 
       // ----------------------------------------
       // TARGET: kb
@@ -305,6 +313,12 @@ Deno.serve(async (req) => {
 
         console.log(`[embeddings] Processing ${chunks.length} KB chunks...`);
 
+        // Create background task for tracking
+        const taskId = await createBackgroundTask(supabase, taskType, {
+          itemsTotal: chunks.length,
+          createdBy: user.id,
+        });
+
         let processed = 0;
         const errors: string[] = [];
 
@@ -326,6 +340,10 @@ Deno.serve(async (req) => {
               errors.push(`${chunk.id}: ${updateError.message}`);
             } else {
               processed++;
+              // Update progress every 5 items
+              if (taskId && processed % 5 === 0) {
+                await updateTaskProgress(supabase, taskId, processed, chunks.length);
+              }
             }
 
             // Rate limiting
@@ -334,6 +352,15 @@ Deno.serve(async (req) => {
             const errorMsg = e instanceof Error ? e.message : String(e);
             console.error(`[embeddings] Error for chunk ${chunk.id}:`, errorMsg);
             errors.push(`${chunk.id}: ${errorMsg}`);
+          }
+        }
+
+        // Complete task
+        if (taskId) {
+          if (errors.length > 0 && processed === 0) {
+            await failTask(supabase, taskId, errors.join("; ").substring(0, 500), 0);
+          } else {
+            await completeTask(supabase, taskId, processed, chunks.length);
           }
         }
 
@@ -348,6 +375,7 @@ Deno.serve(async (req) => {
             success: true,
             processed,
             remaining: remaining || 0,
+            task_id: taskId,
             errors: errors.length > 0 ? errors : undefined
           }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -394,6 +422,12 @@ Deno.serve(async (req) => {
 
         console.log(`[embeddings] Processing ${codes.length} HS codes...`);
 
+        // Create background task for tracking
+        const taskId = await createBackgroundTask(supabase, taskType, {
+          itemsTotal: codes.length,
+          createdBy: user.id,
+        });
+
         let processed = 0;
         const errors: string[] = [];
 
@@ -415,6 +449,10 @@ Deno.serve(async (req) => {
               errors.push(`${code.code_10}: ${updateError.message}`);
             } else {
               processed++;
+              // Update progress every 5 items
+              if (taskId && processed % 5 === 0) {
+                await updateTaskProgress(supabase, taskId, processed, codes.length);
+              }
             }
 
             // Rate limiting
@@ -423,6 +461,15 @@ Deno.serve(async (req) => {
             const errorMsg = e instanceof Error ? e.message : String(e);
             console.error(`[embeddings] Error for code ${code.code_10}:`, errorMsg);
             errors.push(`${code.code_10}: ${errorMsg}`);
+          }
+        }
+
+        // Complete task
+        if (taskId) {
+          if (errors.length > 0 && processed === 0) {
+            await failTask(supabase, taskId, errors.join("; ").substring(0, 500), 0);
+          } else {
+            await completeTask(supabase, taskId, processed, codes.length);
           }
         }
 
@@ -438,6 +485,7 @@ Deno.serve(async (req) => {
             success: true,
             processed,
             remaining: remaining || 0,
+            task_id: taskId,
             errors: errors.length > 0 ? errors : undefined
           }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }

@@ -52,6 +52,48 @@ export type Database = {
           },
         ]
       }
+      background_tasks: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          created_by: string | null
+          error_message: string | null
+          id: string
+          items_processed: number | null
+          items_total: number | null
+          source_id: string | null
+          started_at: string | null
+          status: string
+          task_type: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          created_by?: string | null
+          error_message?: string | null
+          id?: string
+          items_processed?: number | null
+          items_total?: number | null
+          source_id?: string | null
+          started_at?: string | null
+          status?: string
+          task_type: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          created_by?: string | null
+          error_message?: string | null
+          id?: string
+          items_processed?: number | null
+          items_total?: number | null
+          source_id?: string | null
+          started_at?: string | null
+          status?: string
+          task_type?: string
+        }
+        Relationships: []
+      }
       case_files: {
         Row: {
           case_id: string

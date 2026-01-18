@@ -3,6 +3,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { logger } from "../_shared/logger.ts";
 import { corsHeaders, getCorsHeaders } from "../_shared/cors.ts";
+import { 
+  getUserFromToken, 
+  getUserRole, 
+  isAdmin as checkIsAdmin,
+  createServiceClient,
+} from "../_shared/auth.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -1043,21 +1049,16 @@ serve(async (req) => {
     logger.info("╚═══════════════════════════════════════════════════════╝");
     logger.debug("Case:", case_id);
 
-    // Vérifier authentification
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Non authentifié" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    // ═══════════════════════════════════════════════════════════
+    // AUTHENTIFICATION (centralized auth module)
+    // ═══════════════════════════════════════════════════════════
     
-    if (authError || !user) {
+    const authHeader = req.headers.get("Authorization");
+    const user = await getUserFromToken(authHeader);
+    
+    if (!user) {
       return new Response(
-        JSON.stringify({ error: "Token invalide" }),
+        JSON.stringify({ error: "Non authentifié", code: "UNAUTHENTICATED" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -1067,11 +1068,8 @@ serve(async (req) => {
     // ═══════════════════════════════════════════════════════════
     
     // Vérifier si l'utilisateur est admin (limite plus élevée)
-    const { data: hasAdminRole } = await supabase.rpc("has_role", { 
-      _user_id: user.id, 
-      _role: "admin" 
-    });
-    const isAdmin = !!hasAdminRole;
+    const userRole = await getUserRole(user.id);
+    const isAdmin = checkIsAdmin(userRole);
     
     const rateLimit = await checkRateLimit(supabase, user.id, isAdmin);
     

@@ -8,9 +8,12 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { FileUploadZone } from "@/components/case/FileUploadZone";
 import { QuestionForm } from "@/components/case/QuestionForm";
 import { getCaseDetail, classify } from "@/lib/api-client";
-import { CaseDetailResponse, CaseFile, HSResult } from "@/lib/types";
-import { Loader2, Play, AlertCircle, RefreshCw, Package } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { CaseDetailResponse, CaseFile, HSResult, CaseStatus } from "@/lib/types";
+import { Loader2, Play, AlertCircle, RefreshCw, Package, Wifi, WifiOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { toast as sonnerToast } from "sonner";
+import { cn } from "@/lib/utils";
 
 export default function AnalyzeCasePage() {
   const { caseId } = useParams<{ caseId: string }>();
@@ -24,6 +27,7 @@ export default function AnalyzeCasePage() {
   const [lastResult, setLastResult] = useState<HSResult | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
 
   const fetchCaseData = useCallback(async () => {
     if (!caseId) return;
@@ -50,6 +54,124 @@ export default function AnalyzeCasePage() {
   useEffect(() => {
     fetchCaseData();
   }, [fetchCaseData]);
+
+  // Realtime subscription for case updates
+  useEffect(() => {
+    if (!caseId) return;
+
+    const casesChannel = supabase
+      .channel(`case-${caseId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'cases',
+          filter: `id=eq.${caseId}`
+        },
+        (payload) => {
+          console.log('Case update:', payload);
+          
+          // Update case data with proper typing
+          setCaseData(prev => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              case: { 
+                ...prev.case, 
+                status: payload.new.status as CaseStatus 
+              }
+            };
+          });
+
+          const newStatus = payload.new.status as CaseStatus;
+
+          // Handle status changes
+          if (newStatus === "RESULT_READY" || newStatus === "VALIDATED") {
+            sonnerToast.success("Résultat disponible", {
+              description: "La classification est terminée",
+              action: {
+                label: "Voir le résultat",
+                onClick: () => navigate(`/cases/${caseId}/result`)
+              }
+            });
+          } else if (newStatus === "ERROR") {
+            sonnerToast.error("Erreur de classification", {
+              description: "Une erreur s'est produite lors de l'analyse"
+            });
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('Case realtime status:', status);
+        setRealtimeConnected(status === 'SUBSCRIBED');
+      });
+
+    // Subscribe to classification_results for live updates
+    const resultsChannel = supabase
+      .channel(`results-${caseId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'classification_results',
+          filter: `case_id=eq.${caseId}`
+        },
+        (payload) => {
+          console.log('New classification result:', payload);
+          const newResult = payload.new as HSResult;
+          setLastResult(newResult);
+
+          if (newResult.status === "DONE" || newResult.status === "LOW_CONFIDENCE") {
+            if (newResult.evidence && Array.isArray(newResult.evidence) && newResult.evidence.length > 0) {
+              sonnerToast.success("Classification terminée", {
+                description: `Code SH: ${newResult.recommended_code}`,
+                action: {
+                  label: "Voir",
+                  onClick: () => navigate(`/cases/${caseId}/result`)
+                }
+              });
+            }
+          } else if (newResult.status === "NEED_INFO") {
+            sonnerToast.info("Information requise", {
+              description: "Veuillez répondre à la question pour continuer"
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    // Subscribe to case_files for live file updates
+    const filesChannel = supabase
+      .channel(`files-${caseId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'case_files',
+          filter: `case_id=eq.${caseId}`
+        },
+        (payload) => {
+          console.log('New file attached:', payload);
+          const newFile = payload.new as CaseFile;
+          // Only add if not already in list (avoid duplicates from our own uploads)
+          setFiles(prev => {
+            if (prev.some(f => f.id === newFile.id)) return prev;
+            return [...prev, newFile];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      console.log('Cleaning up realtime subscriptions');
+      supabase.removeChannel(casesChannel);
+      supabase.removeChannel(resultsChannel);
+      supabase.removeChannel(filesChannel);
+    };
+  }, [caseId, navigate]);
 
   const handleFileUploaded = (file: CaseFile) => {
     setFiles((prev) => [...prev, file]);
@@ -194,7 +316,19 @@ export default function AnalyzeCasePage() {
                       </CardDescription>
                     </div>
                   </div>
-                  <StatusBadge status={caseData.case.status} />
+                  <div className="flex items-center gap-3">
+                    {realtimeConnected ? (
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground" title="Mises à jour en temps réel actives">
+                        <Wifi className="h-3.5 w-3.5 text-green-500" />
+                        <span className="hidden sm:inline">Temps réel</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground" title="Connexion temps réel inactive">
+                        <WifiOff className="h-3.5 w-3.5 text-muted-foreground" />
+                      </div>
+                    )}
+                    <StatusBadge status={caseData.case.status} />
+                  </div>
                 </div>
               </CardHeader>
             </Card>

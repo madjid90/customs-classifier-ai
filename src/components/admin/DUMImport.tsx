@@ -221,6 +221,7 @@ export function DUMImport() {
       });
     } finally {
       setIsImporting(false);
+    }
   }
 
   // AI Extraction for DUM
@@ -309,7 +310,6 @@ export function DUMImport() {
     } finally {
       setIsImporting(false);
     }
-  }
   }
 
   async function handleSearch(e: React.FormEvent) {

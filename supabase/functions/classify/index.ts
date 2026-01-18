@@ -2,6 +2,36 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 
+// ============================================================================
+// CONDITIONAL LOGGER
+// ============================================================================
+
+const IS_PRODUCTION = Deno.env.get("ENVIRONMENT") === "production";
+
+const logger = {
+  debug: (...args: unknown[]) => {
+    if (!IS_PRODUCTION) console.log("[DEBUG]", ...args);
+  },
+  info: (...args: unknown[]) => {
+    console.log("[INFO]", ...args);
+  },
+  warn: (...args: unknown[]) => {
+    console.warn("[WARN]", ...args);
+  },
+  error: (...args: unknown[]) => {
+    console.error("[ERROR]", ...args);
+  },
+  metric: (name: string, value: number, tags?: Record<string, string>) => {
+    console.log(JSON.stringify({
+      type: "metric",
+      name,
+      value,
+      tags,
+      timestamp: new Date().toISOString(),
+    }));
+  },
+};
+
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
   "https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app",
@@ -285,7 +315,7 @@ async function callOpenAI(
 ): Promise<string> {
   const config = getOpenAIConfig();
   
-  console.log(`[classify] Calling OpenAI ${model}...`);
+  logger.debug(`Calling OpenAI ${model}...`);
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -1062,11 +1092,11 @@ serve(async (req) => {
     
     const { case_id } = validation.data;
 
-    console.log("╔═══════════════════════════════════════════════════════╗");
-    console.log("║    PIPELINE CLASSIFICATION ANTI-HALLUCINATION v4      ║");
-    console.log("║    (avec gestion timeout - limite 25s)                ║");
-    console.log("╚═══════════════════════════════════════════════════════╝");
-    console.log("Case:", case_id);
+    logger.info("╔═══════════════════════════════════════════════════════╗");
+    logger.info("║    PIPELINE CLASSIFICATION ANTI-HALLUCINATION v4      ║");
+    logger.info("║    (avec gestion timeout - limite 25s)                ║");
+    logger.info("╚═══════════════════════════════════════════════════════╝");
+    logger.debug("Case:", case_id);
 
     // Vérifier authentification
     const authHeader = req.headers.get("Authorization");
@@ -1321,11 +1351,18 @@ serve(async (req) => {
     });
 
     const duration = Date.now() - startTime;
-    console.log("╔═══════════════════════════════════════════════════════╗");
-    console.log(`║ PIPELINE TERMINÉ: ${finalResult.status.padEnd(37)}║`);
-    console.log(`║ Vérification: ${verification.passed ? "PASS" : "FAIL"}`.padEnd(56) + "║");
-    console.log(`║ Durée: ${duration}ms`.padEnd(56) + "║");
-    console.log("╚═══════════════════════════════════════════════════════╝");
+    
+    // Log métriques
+    logger.metric("classify_duration_ms", duration);
+    logger.metric("classify_candidates_count", candidates.length);
+    logger.metric("classify_evidence_count", evidence.length);
+    logger.metric("classify_confidence", finalResult.confidence || 0, { status: finalResult.status });
+    
+    logger.info("╔═══════════════════════════════════════════════════════╗");
+    logger.info(`║ PIPELINE TERMINÉ: ${finalResult.status.padEnd(37)}║`);
+    logger.debug(`║ Vérification: ${verification.passed ? "PASS" : "FAIL"}`.padEnd(56) + "║");
+    logger.debug(`║ Durée: ${duration}ms`.padEnd(56) + "║");
+    logger.info("╚═══════════════════════════════════════════════════════╝");
 
     return new Response(
       JSON.stringify({ success: true, result: finalResult, verification, duration_ms: duration }),
@@ -1334,11 +1371,11 @@ serve(async (req) => {
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error(`Pipeline error après ${duration}ms:`, error);
+    logger.error(`Pipeline error après ${duration}ms:`, error);
     
     // Gestion spéciale timeout
     if (error instanceof TimeoutError || (error instanceof Error && error.message?.includes("Timeout"))) {
-      console.error(`TIMEOUT après ${duration}ms:`, error.message);
+      logger.error(`TIMEOUT après ${duration}ms:`, error.message);
       
       return new Response(
         JSON.stringify({

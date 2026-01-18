@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -358,9 +359,52 @@ export default function HistoryPage() {
             </CardHeader>
             <CardContent>
               {isLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
+                <>
+                  {/* Desktop table skeleton */}
+                  <div className="hidden md:block">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b text-left text-sm text-muted-foreground">
+                          <th className="pb-3 font-medium">Produit</th>
+                          <th className="pb-3 font-medium">Type</th>
+                          <th className="pb-3 font-medium">Pays</th>
+                          <th className="pb-3 font-medium">Statut</th>
+                          <th className="pb-3 font-medium">Date</th>
+                          <th className="pb-3 font-medium"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[1, 2, 3, 4, 5].map((i) => (
+                          <tr key={i} className="border-b">
+                            <td className="py-3"><Skeleton className="h-5 w-40" /></td>
+                            <td className="py-3"><Skeleton className="h-4 w-16" /></td>
+                            <td className="py-3"><Skeleton className="h-4 w-20" /></td>
+                            <td className="py-3"><Skeleton className="h-6 w-24 rounded-full" /></td>
+                            <td className="py-3"><Skeleton className="h-4 w-24" /></td>
+                            <td className="py-3"><Skeleton className="h-8 w-20" /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  
+                  {/* Mobile cards skeleton */}
+                  <div className="space-y-3 md:hidden">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div key={i} className="rounded-lg border p-4">
+                        <div className="flex items-start justify-between mb-2">
+                          <Skeleton className="h-5 w-40" />
+                          <Skeleton className="h-6 w-20 rounded-full" />
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <Skeleton className="h-4 w-16" />
+                          <Skeleton className="h-4 w-20" />
+                          <Skeleton className="h-4 w-24" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
               ) : cases.length === 0 ? (
                 <div className="py-8 text-center text-muted-foreground">
                   <FileText className="mx-auto mb-2 h-8 w-8" />

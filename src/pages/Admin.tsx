@@ -233,7 +233,7 @@ export default function AdminPage() {
   };
 
   return (
-    <AppLayout allowedRoles={["admin"]}>
+    <AppLayout>
       <div className="container py-8">
         <Breadcrumbs items={[{ label: "Administration" }]} />
 

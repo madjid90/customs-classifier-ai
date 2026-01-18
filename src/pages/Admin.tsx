@@ -13,6 +13,7 @@ import { HSCodeImport } from "@/components/admin/HSCodeImport";
 import { DUMImport } from "@/components/admin/DUMImport";
 import { KBImport } from "@/components/admin/KBImport";
 import { DataIngestionPanel } from "@/components/admin/DataIngestionPanel";
+import { HSSyncFromLaws } from "@/components/admin/HSSyncFromLaws";
 import { 
   getIngestionList, 
   registerIngestion, 
@@ -45,7 +46,8 @@ import {
   BookOpen,
   ClipboardList,
   Library,
-  Sparkles
+  Sparkles,
+  Scale
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -271,6 +273,10 @@ export default function AdminPage() {
               <TabsTrigger value="dum" className="flex items-center gap-2">
                 <ClipboardList className="h-4 w-4" />
                 DUM
+              </TabsTrigger>
+              <TabsTrigger value="hs-sync" className="flex items-center gap-2">
+                <Scale className="h-4 w-4" />
+                Sync HS
               </TabsTrigger>
             </TabsList>
 
@@ -567,6 +573,11 @@ export default function AdminPage() {
                   <DataIngestionPanel />
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            {/* HS Sync Tab */}
+            <TabsContent value="hs-sync">
+              <HSSyncFromLaws />
             </TabsContent>
           </Tabs>
         </div>

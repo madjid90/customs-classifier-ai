@@ -438,6 +438,39 @@ export type Database = {
         }
         Relationships: []
       }
+      hs_sync_history: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          details: Json | null
+          id: string
+          laws_analyzed: number
+          updates_applied: number
+          updates_found: number
+          version_label: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          details?: Json | null
+          id?: string
+          laws_analyzed?: number
+          updates_applied?: number
+          updates_found?: number
+          version_label: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          details?: Json | null
+          id?: string
+          laws_analyzed?: number
+          updates_applied?: number
+          updates_found?: number
+          version_label?: string
+        }
+        Relationships: []
+      }
       ingestion_ambiguities: {
         Row: {
           ambiguity_type: string

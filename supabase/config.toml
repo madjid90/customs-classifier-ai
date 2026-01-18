@@ -72,3 +72,9 @@ verify_jwt = false
 
 [functions.enrich-hs-codes]
 verify_jwt = false
+
+[functions.log-security-event]
+verify_jwt = false
+
+[functions.sync-hs-from-laws]
+verify_jwt = false

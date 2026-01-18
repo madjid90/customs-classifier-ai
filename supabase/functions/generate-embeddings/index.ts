@@ -9,15 +9,19 @@ const corsHeaders = {
 // CONFIGURATION
 // ============================================================================
 
+const EMBEDDING_MODEL = "text-embedding-3-large";
+const EMBEDDING_DIMENSIONS = 1536;
+const MAX_TEXT_LENGTH = 8000;
+const RATE_LIMIT_DELAY_MS = 100;
+
 function getConfig() {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
-  const embeddingsModel = Deno.env.get("OPENAI_MODEL_EMBEDDINGS") || "text-embedding-3-large";
   
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY non configurée");
+    throw new Error("OPENAI_API_KEY non configurée. Veuillez l'ajouter dans les secrets Supabase.");
   }
   
-  return { apiKey, embeddingsModel };
+  return { apiKey };
 }
 
 // ============================================================================
@@ -25,30 +29,33 @@ function getConfig() {
 // ============================================================================
 
 interface EmbeddingRequest {
-  mode: "batch" | "single" | "stats";
+  mode: "batch" | "stats";
+  target?: "hs" | "kb";
   batch_size?: number;
-  chunk_id?: string;
-  text?: string;
 }
 
-interface EmbeddingStats {
-  total_chunks: number;
-  with_embeddings: number;
-  without_embeddings: number;
-  percentage_complete: number;
+interface StatsResponse {
+  hs_codes: {
+    total: number;
+    with_embedding: number;
+  };
+  kb_chunks: {
+    total: number;
+    with_embedding: number;
+  };
 }
 
 // ============================================================================
 // EMBEDDING GENERATION
 // ============================================================================
 
-async function generateEmbedding(text: string, config: { apiKey: string; embeddingsModel: string }): Promise<number[]> {
-  // Nettoyer et tronquer le texte (max 8191 tokens ≈ 30000 chars pour text-embedding-3-large)
+async function generateEmbedding(text: string, apiKey: string): Promise<number[]> {
+  // Nettoyer et tronquer le texte
   const cleanText = text
     .replace(/\n+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .substring(0, 30000);
+    .substring(0, MAX_TEXT_LENGTH);
 
   if (cleanText.length < 10) {
     throw new Error("Texte trop court pour générer un embedding");
@@ -57,13 +64,13 @@ async function generateEmbedding(text: string, config: { apiKey: string; embeddi
   const response = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${config.apiKey}`,
+      "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: config.embeddingsModel,
+      model: EMBEDDING_MODEL,
       input: cleanText,
-      dimensions: 3072, // text-embedding-3-large default
+      dimensions: EMBEDDING_DIMENSIONS,
     }),
   });
 
@@ -72,57 +79,61 @@ async function generateEmbedding(text: string, config: { apiKey: string; embeddi
     console.error("[embeddings] OpenAI error:", response.status, errorText);
     
     if (response.status === 429) {
-      throw new Error("RATE_LIMIT: Limite de requêtes OpenAI dépassée");
+      throw new Error("RATE_LIMIT: Limite de requêtes OpenAI dépassée. Réessayez dans quelques secondes.");
     }
     if (response.status === 401) {
-      throw new Error("AUTH_ERROR: Clé API OpenAI invalide");
+      throw new Error("AUTH_ERROR: Clé API OpenAI invalide ou expirée.");
     }
-    throw new Error(`OPENAI_ERROR: ${response.status}`);
+    throw new Error(`OPENAI_ERROR: ${response.status} - ${errorText}`);
   }
 
   const data = await response.json();
   return data.data[0].embedding;
 }
 
-async function generateBatchEmbeddings(
-  texts: { id: string; text: string }[],
-  config: { apiKey: string; embeddingsModel: string }
-): Promise<{ id: string; embedding: number[] }[]> {
-  // OpenAI supporte jusqu'à 2048 inputs par requête
-  const cleanTexts = texts.map(t => ({
-    id: t.id,
-    text: t.text.replace(/\n+/g, " ").replace(/\s+/g, " ").trim().substring(0, 30000)
-  })).filter(t => t.text.length >= 10);
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-  if (cleanTexts.length === 0) {
-    return [];
+// ============================================================================
+// TEXT BUILDERS
+// ============================================================================
+
+function buildKBChunkText(chunk: { ref: string; text: string; metadata?: { summary?: string } }): string {
+  let combined = chunk.ref || "";
+  if (chunk.text) {
+    combined += " " + chunk.text;
   }
-
-  const response = await fetch("https://api.openai.com/v1/embeddings", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: config.embeddingsModel,
-      input: cleanTexts.map(t => t.text),
-      dimensions: 3072,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error("[embeddings] Batch error:", response.status, errorText);
-    throw new Error(`OPENAI_ERROR: ${response.status}`);
+  if (chunk.metadata?.summary) {
+    combined += " " + chunk.metadata.summary;
   }
+  return combined.trim();
+}
 
-  const data = await response.json();
+function buildHSCodeText(code: {
+  code_10: string;
+  label_fr: string;
+  label_ar?: string;
+  enrichment?: {
+    keywords_fr?: string[];
+    typical_products?: string[];
+  };
+}): string {
+  let combined = `Code ${code.code_10}: ${code.label_fr}`;
   
-  return data.data.map((item: { index: number; embedding: number[] }) => ({
-    id: cleanTexts[item.index].id,
-    embedding: item.embedding,
-  }));
+  if (code.label_ar) {
+    combined += ` ${code.label_ar}`;
+  }
+  
+  if (code.enrichment?.keywords_fr?.length) {
+    combined += ` Mots-clés: ${code.enrichment.keywords_fr.join(", ")}`;
+  }
+  
+  if (code.enrichment?.typical_products?.length) {
+    combined += ` Produits typiques: ${code.enrichment.typical_products.join(", ")}`;
+  }
+  
+  return combined.trim();
 }
 
 // ============================================================================
@@ -143,7 +154,7 @@ Deno.serve(async (req) => {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return new Response(
-        JSON.stringify({ message: "Non authentifié" }),
+        JSON.stringify({ error: "Non authentifié" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -153,7 +164,7 @@ Deno.serve(async (req) => {
     
     if (authError || !user) {
       return new Response(
-        JSON.stringify({ message: "Token invalide" }),
+        JSON.stringify({ error: "Token invalide" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -166,32 +177,51 @@ Deno.serve(async (req) => {
 
     if (!hasAdmin) {
       return new Response(
-        JSON.stringify({ message: "Accès réservé aux administrateurs" }),
+        JSON.stringify({ error: "Accès réservé aux administrateurs" }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const body: EmbeddingRequest = await req.json();
-    const { mode = "stats", batch_size = 50, chunk_id, text } = body;
+    const { mode = "stats", target, batch_size = 50 } = body;
 
-    console.log(`[embeddings] Mode: ${mode}, batch_size: ${batch_size}`);
+    console.log(`[embeddings] Mode: ${mode}, target: ${target}, batch_size: ${batch_size}`);
 
-    // Mode stats - retourner les statistiques
+    // ========================================
+    // MODE: stats
+    // ========================================
     if (mode === "stats") {
-      const { count: totalChunks } = await supabase
+      // Stats HS codes
+      const { count: hsTotal } = await supabase
+        .from("hs_codes")
+        .select("*", { count: "exact", head: true })
+        .eq("active", true);
+
+      const { count: hsWithEmbedding } = await supabase
+        .from("hs_codes")
+        .select("*", { count: "exact", head: true })
+        .eq("active", true)
+        .not("embedding", "is", null);
+
+      // Stats KB chunks
+      const { count: kbTotal } = await supabase
         .from("kb_chunks")
         .select("*", { count: "exact", head: true });
 
-      const { count: withEmbeddings } = await supabase
+      const { count: kbWithEmbedding } = await supabase
         .from("kb_chunks")
         .select("*", { count: "exact", head: true })
         .not("embedding", "is", null);
 
-      const stats: EmbeddingStats = {
-        total_chunks: totalChunks || 0,
-        with_embeddings: withEmbeddings || 0,
-        without_embeddings: (totalChunks || 0) - (withEmbeddings || 0),
-        percentage_complete: totalChunks ? Math.round(((withEmbeddings || 0) / totalChunks) * 100) : 100,
+      const stats: StatsResponse = {
+        hs_codes: {
+          total: hsTotal || 0,
+          with_embedding: hsWithEmbedding || 0,
+        },
+        kb_chunks: {
+          total: kbTotal || 0,
+          with_embedding: kbWithEmbedding || 0,
+        },
       };
 
       return new Response(
@@ -200,122 +230,199 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Mode single - générer embedding pour un texte spécifique
-    if (mode === "single") {
-      if (!text) {
+    // ========================================
+    // MODE: batch
+    // ========================================
+    if (mode === "batch") {
+      if (!target || !["hs", "kb"].includes(target)) {
         return new Response(
-          JSON.stringify({ message: "Texte requis pour le mode single" }),
+          JSON.stringify({ error: 'Paramètre "target" requis: "hs" ou "kb"' }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
       const config = getConfig();
-      const embedding = await generateEmbedding(text, config);
 
-      // Si chunk_id fourni, sauvegarder dans la DB
-      if (chunk_id) {
-        const embeddingString = `[${embedding.join(",")}]`;
-        const { error: updateError } = await supabase
+      // ----------------------------------------
+      // TARGET: kb
+      // ----------------------------------------
+      if (target === "kb") {
+        // Récupérer les chunks sans embeddings
+        const { data: chunks, error: fetchError } = await supabase
           .from("kb_chunks")
-          .update({ embedding: embeddingString })
-          .eq("id", chunk_id);
+          .select("id, ref, text, metadata")
+          .is("embedding", null)
+          .limit(batch_size);
 
-        if (updateError) {
-          console.error("[embeddings] Update error:", updateError);
+        if (fetchError) {
+          console.error("[embeddings] Fetch error:", fetchError);
           return new Response(
-            JSON.stringify({ message: updateError.message }),
+            JSON.stringify({ error: fetchError.message }),
             { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         }
-      }
 
-      return new Response(
-        JSON.stringify({ 
-          success: true, 
-          embedding,
-          dimensions: embedding.length,
-          saved: !!chunk_id
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+        if (!chunks || chunks.length === 0) {
+          const { count: remaining } = await supabase
+            .from("kb_chunks")
+            .select("*", { count: "exact", head: true })
+            .is("embedding", null);
 
-    // Mode batch - traiter les chunks sans embeddings
-    if (mode === "batch") {
-      const config = getConfig();
+          return new Response(
+            JSON.stringify({ 
+              success: true, 
+              processed: 0,
+              remaining: remaining || 0,
+              message: "Aucun chunk KB sans embedding"
+            }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
 
-      // Récupérer les chunks sans embeddings
-      const { data: chunks, error: fetchError } = await supabase
-        .from("kb_chunks")
-        .select("id, text")
-        .is("embedding", null)
-        .limit(batch_size);
+        console.log(`[embeddings] Processing ${chunks.length} KB chunks...`);
 
-      if (fetchError) {
-        console.error("[embeddings] Fetch error:", fetchError);
+        let processed = 0;
+        const errors: string[] = [];
+
+        for (const chunk of chunks) {
+          try {
+            const text = buildKBChunkText(chunk);
+            const embedding = await generateEmbedding(text, config.apiKey);
+            
+            // Format as string for vector column
+            const embeddingString = `[${embedding.join(",")}]`;
+            
+            const { error: updateError } = await supabase
+              .from("kb_chunks")
+              .update({ embedding: embeddingString })
+              .eq("id", chunk.id);
+
+            if (updateError) {
+              console.error(`[embeddings] Update error for chunk ${chunk.id}:`, updateError);
+              errors.push(`${chunk.id}: ${updateError.message}`);
+            } else {
+              processed++;
+            }
+
+            // Rate limiting
+            await sleep(RATE_LIMIT_DELAY_MS);
+          } catch (e) {
+            const errorMsg = e instanceof Error ? e.message : String(e);
+            console.error(`[embeddings] Error for chunk ${chunk.id}:`, errorMsg);
+            errors.push(`${chunk.id}: ${errorMsg}`);
+          }
+        }
+
+        // Compter les chunks restants
+        const { count: remaining } = await supabase
+          .from("kb_chunks")
+          .select("*", { count: "exact", head: true })
+          .is("embedding", null);
+
         return new Response(
-          JSON.stringify({ message: fetchError.message }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      if (!chunks || chunks.length === 0) {
-        return new Response(
-          JSON.stringify({ 
-            success: true, 
-            message: "Aucun chunk sans embedding",
-            processed: 0
+          JSON.stringify({
+            success: true,
+            processed,
+            remaining: remaining || 0,
+            errors: errors.length > 0 ? errors : undefined
           }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
-      console.log(`[embeddings] Processing ${chunks.length} chunks...`);
+      // ----------------------------------------
+      // TARGET: hs
+      // ----------------------------------------
+      if (target === "hs") {
+        // Récupérer les codes HS sans embeddings
+        const { data: codes, error: fetchError } = await supabase
+          .from("hs_codes")
+          .select("code_10, label_fr, label_ar, enrichment")
+          .eq("active", true)
+          .is("embedding", null)
+          .limit(batch_size);
 
-      // Générer les embeddings en batch
-      const embeddings = await generateBatchEmbeddings(chunks, config);
-
-      console.log(`[embeddings] Generated ${embeddings.length} embeddings`);
-
-      // Sauvegarder les embeddings
-      let savedCount = 0;
-      let errorCount = 0;
-
-      for (const item of embeddings) {
-        const embeddingString = `[${item.embedding.join(",")}]`;
-        const { error: updateError } = await supabase
-          .from("kb_chunks")
-          .update({ embedding: embeddingString })
-          .eq("id", item.id);
-
-        if (updateError) {
-          console.error(`[embeddings] Update error for ${item.id}:`, updateError);
-          errorCount++;
-        } else {
-          savedCount++;
+        if (fetchError) {
+          console.error("[embeddings] Fetch error:", fetchError);
+          return new Response(
+            JSON.stringify({ error: fetchError.message }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
         }
+
+        if (!codes || codes.length === 0) {
+          const { count: remaining } = await supabase
+            .from("hs_codes")
+            .select("*", { count: "exact", head: true })
+            .eq("active", true)
+            .is("embedding", null);
+
+          return new Response(
+            JSON.stringify({ 
+              success: true, 
+              processed: 0,
+              remaining: remaining || 0,
+              message: "Aucun code HS sans embedding"
+            }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        console.log(`[embeddings] Processing ${codes.length} HS codes...`);
+
+        let processed = 0;
+        const errors: string[] = [];
+
+        for (const code of codes) {
+          try {
+            const text = buildHSCodeText(code);
+            const embedding = await generateEmbedding(text, config.apiKey);
+            
+            // Format as string for vector column
+            const embeddingString = `[${embedding.join(",")}]`;
+            
+            const { error: updateError } = await supabase
+              .from("hs_codes")
+              .update({ embedding: embeddingString })
+              .eq("code_10", code.code_10);
+
+            if (updateError) {
+              console.error(`[embeddings] Update error for code ${code.code_10}:`, updateError);
+              errors.push(`${code.code_10}: ${updateError.message}`);
+            } else {
+              processed++;
+            }
+
+            // Rate limiting
+            await sleep(RATE_LIMIT_DELAY_MS);
+          } catch (e) {
+            const errorMsg = e instanceof Error ? e.message : String(e);
+            console.error(`[embeddings] Error for code ${code.code_10}:`, errorMsg);
+            errors.push(`${code.code_10}: ${errorMsg}`);
+          }
+        }
+
+        // Compter les codes restants
+        const { count: remaining } = await supabase
+          .from("hs_codes")
+          .select("*", { count: "exact", head: true })
+          .eq("active", true)
+          .is("embedding", null);
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            processed,
+            remaining: remaining || 0,
+            errors: errors.length > 0 ? errors : undefined
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
-
-      // Récupérer le nombre de chunks restants
-      const { count: remaining } = await supabase
-        .from("kb_chunks")
-        .select("*", { count: "exact", head: true })
-        .is("embedding", null);
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          processed: chunks.length,
-          saved: savedCount,
-          errors: errorCount,
-          remaining: remaining || 0,
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
     }
 
     return new Response(
-      JSON.stringify({ message: "Mode invalide. Utilisez: stats, single, ou batch" }),
+      JSON.stringify({ error: 'Mode invalide. Utilisez: "stats" ou "batch"' }),
       { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
@@ -323,7 +430,7 @@ Deno.serve(async (req) => {
     console.error("[embeddings] Error:", error);
     return new Response(
       JSON.stringify({ 
-        message: error instanceof Error ? error.message : "Erreur serveur",
+        error: error instanceof Error ? error.message : "Erreur serveur",
         success: false 
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

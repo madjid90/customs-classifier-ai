@@ -9,28 +9,33 @@ import {
   type UserProfile,
   type UserRole
 } from "../_shared/auth.ts";
+import {
+  CreateCaseSchema,
+  UUIDSchema,
+  PaginationSchema,
+  CaseStatusSchema,
+  SafeStringSchema,
+  validateRequestBody,
+  validatePathParam,
+  type ValidationResult,
+} from "../_shared/validation.ts";
 
 // ============================================================================
-// INPUT VALIDATION (Zod)
+// ADDITIONAL SCHEMAS (specific to cases)
 // ============================================================================
 
-const CreateCaseSchema = z.object({
-  product_name: z.string().min(3, "Le nom du produit doit contenir au moins 3 caractères").max(500, "Le nom du produit ne peut pas dépasser 500 caractères"),
-  type_import_export: z.enum(["import", "export"], { errorMap: () => ({ message: "type_import_export doit être 'import' ou 'export'" }) }),
-  origin_country: z.string().length(2, "Le code pays doit contenir exactement 2 caractères").toUpperCase(),
+const ListCasesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+  status: CaseStatusSchema.optional(),
+  q: SafeStringSchema(200).optional(),
+  created_by: UUIDSchema.optional(),
+  date_from: z.string().datetime().optional(),
+  date_to: z.string().datetime().optional(),
 });
 
 type CreateCaseRequest = z.infer<typeof CreateCaseSchema>;
-
-interface ListCasesParams {
-  limit?: number;
-  offset?: number;
-  status?: string;
-  q?: string;
-  created_by?: string;
-  date_from?: string;
-  date_to?: string;
-}
+type ListCasesQuery = z.infer<typeof ListCasesQuerySchema>;
 
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -177,10 +182,10 @@ async function handleListCases(
   profile: UserProfile,
   corsHeaders: Record<string, string>
 ) {
-  const params: ListCasesParams = {
+  const params: ListCasesQuery = {
     limit: parseInt(url.searchParams.get("limit") || "20"),
     offset: parseInt(url.searchParams.get("offset") || "0"),
-    status: url.searchParams.get("status") || undefined,
+    status: url.searchParams.get("status") as ListCasesQuery["status"] || undefined,
     q: url.searchParams.get("q") || undefined,
     created_by: url.searchParams.get("created_by") || undefined,
     date_from: url.searchParams.get("date_from") || undefined,

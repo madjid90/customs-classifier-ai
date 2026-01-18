@@ -9,6 +9,10 @@ import {
   isAdmin as checkIsAdmin,
   createServiceClient,
 } from "../_shared/auth.ts";
+import {
+  ClassifyRequestSchema,
+  validateInput,
+} from "../_shared/validation.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -161,31 +165,9 @@ async function checkRateLimit(
 // INPUT VALIDATION (Zod)
 // ============================================================================
 
-const ClassifyRequestSchema = z.object({
-  case_id: z.string().uuid("case_id doit être un UUID valide"),
-});
+// ClassifyRequestSchema imported from _shared/validation.ts
 
-type ClassifyRequest = z.infer<typeof ClassifyRequestSchema>;
-
-function validateInput(body: unknown): { success: true; data: ClassifyRequest } | { success: false; error: Response } {
-  const result = ClassifyRequestSchema.safeParse(body);
-  if (!result.success) {
-    return {
-      success: false,
-      error: new Response(
-        JSON.stringify({
-          error: "Validation error",
-          details: result.error.issues.map(i => ({
-            field: i.path.join("."),
-            message: i.message,
-          })),
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      ),
-    };
-  }
-  return { success: true, data: result.data };
-}
+type ClassifyRequest = { case_id: string };
 
 // ============================================================================
 // TYPES STRICTS
@@ -1036,7 +1018,7 @@ serve(async (req) => {
       );
     }
     
-    const validation = validateInput(body);
+    const validation = validateInput(ClassifyRequestSchema, body);
     if (!validation.success) {
       return validation.error;
     }

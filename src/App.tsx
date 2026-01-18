@@ -15,6 +15,7 @@ import HistoryPage from "@/pages/History";
 import AdminPage from "@/pages/Admin";
 import MonitoringPage from "@/pages/Monitoring";
 import NotFound from "@/pages/NotFound";
+import ForbiddenPage from "@/pages/Forbidden";
 
 // Dev-only lazy import
 const DevOpenApiCheck = lazy(() => import("@/pages/DevOpenApiCheck"));
@@ -80,6 +81,9 @@ const App = () => (
                 </Suspense>
               } />
             )}
+            
+            {/* Error pages */}
+            <Route path="/403" element={<ForbiddenPage />} />
             
             {/* 404 */}
             <Route path="*" element={<NotFound />} />

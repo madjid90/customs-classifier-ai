@@ -363,8 +363,8 @@ export default function ResultPage() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">
-                {/* Main Code */}
-                {result.recommended_code && (
+                {/* Main Code - R1: Only display if evidence exists */}
+                {result.recommended_code && result.evidence && result.evidence.length > 0 && (
                   <div className="rounded-lg border bg-muted/30 p-6 text-center">
                     <p className="text-sm text-muted-foreground mb-2">Code SH / Nomenclature Maroc</p>
                     <p className="hs-code text-3xl text-primary">
@@ -373,6 +373,17 @@ export default function ResultPage() {
                     <div className="mt-3 flex items-center justify-center gap-2">
                       <ConfidenceBadge level={result.confidence_level} percentage={result.confidence} />
                     </div>
+                  </div>
+                )}
+
+                {/* R1: No code display without evidence */}
+                {result.recommended_code && (!result.evidence || result.evidence.length === 0) && result.status !== "ERROR" && (
+                  <div className="rounded-lg border border-warning/50 bg-warning/5 p-6 text-center">
+                    <AlertTriangle className="h-8 w-8 text-warning mx-auto mb-2" />
+                    <p className="font-medium text-warning">Résultat non affichable</p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Aucune preuve documentaire disponible. Ajoutez des documents supplémentaires pour obtenir une classification fiable.
+                    </p>
                   </div>
                 )}
 
@@ -443,7 +454,7 @@ export default function ResultPage() {
                           <p className="text-sm text-muted-foreground">{alt.reason}</p>
                         </div>
                         <span className="text-sm text-muted-foreground font-mono">
-                          {Math.round(alt.confidence * 100)}%
+                          {Math.round((alt.confidence <= 1 ? alt.confidence * 100 : alt.confidence))}%
                         </span>
                       </div>
                     ))}

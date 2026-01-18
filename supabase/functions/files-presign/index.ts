@@ -62,8 +62,12 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Validate file type
-    const allowedFileTypes = ["facture", "fiche_technique", "certificat", "photo", "autre"];
+    // Validate file type - matches case_file_type enum
+    const allowedFileTypes = [
+      "tech_sheet", "invoice", "packing_list", "certificate", 
+      "dum", "photo_product", "photo_label", "photo_plate", 
+      "other", "admin_ingestion"
+    ];
     if (!allowedFileTypes.includes(file_type)) {
       return new Response(
         JSON.stringify({ error: `Invalid file_type. Allowed: ${allowedFileTypes.join(", ")}` }),

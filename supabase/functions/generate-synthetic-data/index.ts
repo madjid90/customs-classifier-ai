@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
@@ -28,11 +29,17 @@ function getCorsHeaders(req: Request): Record<string, string> {
   };
 }
 
-interface RequestBody {
-  mode: "stats" | "hs_sample" | "kb_sample" | "dum_sample";
-  count?: number;
-  company_id?: string;
-}
+// ============================================================================
+// INPUT VALIDATION (Zod)
+// ============================================================================
+
+const GenerateRequestSchema = z.object({
+  mode: z.enum(["stats", "hs_sample", "kb_sample", "dum_sample"]),
+  count: z.number().int().min(1).max(500).default(50),
+  company_id: z.string().uuid().optional(),
+});
+
+type RequestBody = z.infer<typeof GenerateRequestSchema>;
 
 interface HSCodeGenerated {
   code_10: string;
@@ -174,9 +181,33 @@ serve(async (req) => {
       );
     }
 
-    // Parse request body
-    const body: RequestBody = await req.json();
-    const { mode, count = 50 } = body;
+    // Parse and validate request body
+    let rawBody: unknown;
+    try {
+      rawBody = await req.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ error: "Corps de requête JSON invalide" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    const validation = GenerateRequestSchema.safeParse(rawBody);
+    if (!validation.success) {
+      return new Response(
+        JSON.stringify({
+          error: "Validation error",
+          details: validation.error.issues.map(i => ({
+            field: i.path.join("."),
+            message: i.message,
+          })),
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    const body: RequestBody = validation.data;
+    const { mode, count } = body;
 
     console.log(`Processing mode: ${mode}, count: ${count}`);
 

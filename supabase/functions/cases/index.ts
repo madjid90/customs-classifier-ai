@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
@@ -31,11 +32,17 @@ function getCorsHeaders(req: Request): Record<string, string> {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-interface CreateCaseRequest {
-  type_import_export: "import" | "export";
-  origin_country: string;
-  product_name: string;
-}
+// ============================================================================
+// INPUT VALIDATION (Zod)
+// ============================================================================
+
+const CreateCaseSchema = z.object({
+  product_name: z.string().min(3, "Le nom du produit doit contenir au moins 3 caractères").max(500, "Le nom du produit ne peut pas dépasser 500 caractères"),
+  type_import_export: z.enum(["import", "export"], { errorMap: () => ({ message: "type_import_export doit être 'import' ou 'export'" }) }),
+  origin_country: z.string().length(2, "Le code pays doit contenir exactement 2 caractères").toUpperCase(),
+});
+
+type CreateCaseRequest = z.infer<typeof CreateCaseSchema>;
 
 interface ListCasesParams {
   limit?: number;
@@ -140,21 +147,32 @@ serve(async (req) => {
 
     // Route: POST /cases - Create new case
     if (req.method === "POST" && pathParts.length === 1 && pathParts[0] === "cases") {
-      const body: CreateCaseRequest = await req.json();
-
-      if (!body.type_import_export || !body.origin_country || !body.product_name) {
+      // Parse and validate request body
+      let rawBody: unknown;
+      try {
+        rawBody = await req.json();
+      } catch {
         return new Response(
-          JSON.stringify({ error: "Champs requis manquants" }),
+          JSON.stringify({ error: "Corps de requête JSON invalide" }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-
-      if (body.product_name.length < 3) {
+      
+      const validation = CreateCaseSchema.safeParse(rawBody);
+      if (!validation.success) {
         return new Response(
-          JSON.stringify({ error: "Le nom du produit doit contenir au moins 3 caractères" }),
+          JSON.stringify({
+            error: "Validation error",
+            details: validation.error.issues.map(i => ({
+              field: i.path.join("."),
+              message: i.message,
+            })),
+          }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+      
+      const body: CreateCaseRequest = validation.data;
 
       // Create case
       const { data: newCase, error: createError } = await supabase

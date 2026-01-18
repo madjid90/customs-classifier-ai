@@ -256,6 +256,10 @@ export default function AdminPage() {
                 <Database className="h-4 w-4" />
                 Imports
               </TabsTrigger>
+              <TabsTrigger value="ai-ingest" className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4" />
+                IA Ingestion
+              </TabsTrigger>
               <TabsTrigger value="kb" className="flex items-center gap-2">
                 <Search className="h-4 w-4" />
                 Qualite KB
@@ -267,10 +271,6 @@ export default function AdminPage() {
               <TabsTrigger value="dum" className="flex items-center gap-2">
                 <ClipboardList className="h-4 w-4" />
                 DUM
-              </TabsTrigger>
-              <TabsTrigger value="ai-ingestion" className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4" />
-                IA Ingestion
               </TabsTrigger>
             </TabsList>
 
@@ -552,8 +552,21 @@ export default function AdminPage() {
             </TabsContent>
 
             {/* AI Ingestion Tab */}
-            <TabsContent value="ai-ingestion">
-              <DataIngestionPanel />
+            <TabsContent value="ai-ingest">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Sparkles className="h-5 w-5" />
+                    Ingestion Automatique par IA
+                  </CardTitle>
+                  <CardDescription>
+                    Utilisez l'IA pour générer, enrichir et vectoriser automatiquement vos données de référence
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <DataIngestionPanel />
+                </CardContent>
+              </Card>
             </TabsContent>
           </Tabs>
         </div>

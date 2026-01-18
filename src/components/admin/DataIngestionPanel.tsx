@@ -19,6 +19,9 @@ import {
   Sparkles,
   Zap,
   Upload,
+  Stethoscope,
+  XCircle,
+  AlertCircle,
 } from "lucide-react";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -33,6 +36,17 @@ interface ActionResult {
   processed?: number;
   remaining?: number;
   error?: string;
+}
+
+interface DiagnosticResult {
+  openaiConfigured: boolean | null;
+  hsCodesEnough: boolean;
+  kbChunksEnough: boolean;
+  hsEmbeddingsOk: boolean;
+  kbEmbeddingsOk: boolean;
+  sqlFunctionsOk: boolean | null;
+  errors: string[];
+  warnings: string[];
 }
 
 export function DataIngestionPanel() {
@@ -50,6 +64,10 @@ export function DataIngestionPanel() {
   
   // DUM generation count
   const [dumCount, setDumCount] = useState(100);
+  
+  // Diagnostic state
+  const [isDiagnosing, setIsDiagnosing] = useState(false);
+  const [diagnosticResult, setDiagnosticResult] = useState<DiagnosticResult | null>(null);
 
   useEffect(() => {
     fetchStats();
@@ -154,6 +172,144 @@ export function DataIngestionPanel() {
   const handleGenerateDUM = () => 
     callEdgeFunction("generate-synthetic-data", { mode: "dum_sample", count: dumCount }, setIsGeneratingDUM);
 
+  // Diagnostic function
+  async function runDiagnostic() {
+    setIsDiagnosing(true);
+    setDiagnosticResult(null);
+    
+    const result: DiagnosticResult = {
+      openaiConfigured: null,
+      hsCodesEnough: false,
+      kbChunksEnough: false,
+      hsEmbeddingsOk: false,
+      kbEmbeddingsOk: false,
+      sqlFunctionsOk: null,
+      errors: [],
+      warnings: [],
+    };
+    
+    try {
+      // 1. Check OPENAI_API_KEY by calling generate-synthetic-data
+      const headers = await getAuthHeaders();
+      
+      try {
+        const statsResponse = await fetch(`${SUPABASE_URL}/functions/v1/generate-synthetic-data`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ mode: "stats" }),
+        });
+        
+        const statsData = await statsResponse.json();
+        
+        if (!statsResponse.ok) {
+          if (statsData.error?.includes("OPENAI_API_KEY") || statsData.error?.includes("OpenAI")) {
+            result.openaiConfigured = false;
+            result.errors.push("OPENAI_API_KEY non configurée → Ajoutez la clé dans les secrets Supabase");
+          } else {
+            result.openaiConfigured = true; // Other error, but key might be configured
+          }
+        } else {
+          result.openaiConfigured = true;
+          
+          // Update stats from response
+          if (statsData.stats) {
+            setStats(statsData.stats);
+          }
+        }
+      } catch (err) {
+        result.openaiConfigured = false;
+        result.errors.push("Impossible de vérifier la configuration OpenAI");
+      }
+      
+      // 2. Check data sufficiency
+      const currentHsTotal = stats?.hs_codes.total ?? 0;
+      const currentKbTotal = stats?.kb_chunks.total ?? 0;
+      const currentHsEmbedding = stats?.hs_codes.with_embedding ?? 0;
+      const currentKbEmbedding = stats?.kb_chunks.with_embedding ?? 0;
+      
+      result.hsCodesEnough = currentHsTotal >= 100;
+      result.kbChunksEnough = currentKbTotal >= 100;
+      
+      if (!result.hsCodesEnough) {
+        result.errors.push(`Codes HS insuffisants: ${currentHsTotal}/100 → Importez ou générez des codes HS`);
+      }
+      if (!result.kbChunksEnough) {
+        result.errors.push(`KB Chunks insuffisants: ${currentKbTotal}/100 → Importez ou générez des chunks KB`);
+      }
+      
+      // 3. Check embeddings (>= 80%)
+      const hsEmbedPercent = currentHsTotal > 0 ? (currentHsEmbedding / currentHsTotal) * 100 : 0;
+      const kbEmbedPercent = currentKbTotal > 0 ? (currentKbEmbedding / currentKbTotal) * 100 : 0;
+      
+      result.hsEmbeddingsOk = hsEmbedPercent >= 80;
+      result.kbEmbeddingsOk = kbEmbedPercent >= 80;
+      
+      if (!result.hsEmbeddingsOk && currentHsTotal > 0) {
+        result.warnings.push(`Embeddings HS: ${hsEmbedPercent.toFixed(0)}% (< 80%) → Générez plus d'embeddings HS`);
+      }
+      if (!result.kbEmbeddingsOk && currentKbTotal > 0) {
+        result.warnings.push(`Embeddings KB: ${kbEmbedPercent.toFixed(0)}% (< 80%) → Générez plus d'embeddings KB`);
+      }
+      
+      // 4. Check SQL functions by calling match_kb_chunks
+      try {
+        // Create a dummy embedding (1536 dimensions of zeros)
+        const dummyEmbedding = new Array(1536).fill(0);
+        
+        const { error: rpcError } = await supabase.rpc('match_kb_chunks', {
+          query_embedding: JSON.stringify(dummyEmbedding),
+          match_threshold: 0.0,
+          match_count: 1,
+          filter_sources: null,
+        });
+        
+        if (rpcError) {
+          // Check if it's just no results vs actual function error
+          if (rpcError.message.includes("does not exist") || rpcError.message.includes("function")) {
+            result.sqlFunctionsOk = false;
+            result.errors.push("Fonction SQL match_kb_chunks non disponible → Exécutez les migrations");
+          } else {
+            // Function exists but returned error (possibly no data, which is OK)
+            result.sqlFunctionsOk = true;
+          }
+        } else {
+          result.sqlFunctionsOk = true;
+        }
+      } catch (err) {
+        result.sqlFunctionsOk = false;
+        result.errors.push("Impossible de vérifier les fonctions SQL");
+      }
+      
+      setDiagnosticResult(result);
+      
+      const allGood = 
+        result.openaiConfigured === true &&
+        result.hsCodesEnough &&
+        result.kbChunksEnough &&
+        result.hsEmbeddingsOk &&
+        result.kbEmbeddingsOk &&
+        result.sqlFunctionsOk === true;
+      
+      toast({
+        title: allGood ? "Diagnostic réussi" : "Diagnostic terminé",
+        description: allGood 
+          ? "Le système est prêt pour la classification !" 
+          : `${result.errors.length} erreur(s), ${result.warnings.length} avertissement(s)`,
+        variant: allGood ? "default" : "destructive",
+      });
+      
+    } catch (err) {
+      console.error("Diagnostic error:", err);
+      toast({
+        title: "Erreur",
+        description: "Le diagnostic a échoué",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDiagnosing(false);
+    }
+  }
+
   // Derived values
   const hsTotal = stats?.hs_codes.total ?? 0;
   const hsWithEmbedding = stats?.hs_codes.with_embedding ?? 0;
@@ -164,6 +320,15 @@ export function DataIngestionPanel() {
   const kbEmbeddingPercent = kbTotal > 0 ? (kbWithEmbedding / kbTotal) * 100 : 0;
   
   const isReady = hsTotal >= 100 && kbTotal >= 100;
+  
+  // Check if diagnostic passed
+  const diagnosticPassed = diagnosticResult && 
+    diagnosticResult.openaiConfigured === true &&
+    diagnosticResult.hsCodesEnough &&
+    diagnosticResult.kbChunksEnough &&
+    diagnosticResult.hsEmbeddingsOk &&
+    diagnosticResult.kbEmbeddingsOk &&
+    diagnosticResult.sqlFunctionsOk === true;
 
   const getHSBadge = () => {
     if (hsTotal >= 1000) return <Badge className="bg-success text-success-foreground">Complet</Badge>;
@@ -481,8 +646,123 @@ export function DataIngestionPanel() {
         </TabsContent>
       </Tabs>
 
-      {/* Refresh Button */}
-      <div className="flex justify-end">
+      {/* Diagnostic Result Alert */}
+      {diagnosticResult && (
+        <Alert variant={diagnosticPassed ? "default" : "destructive"}>
+          {diagnosticPassed ? (
+            <CheckCircle className="h-4 w-4" />
+          ) : (
+            <XCircle className="h-4 w-4" />
+          )}
+          <AlertDescription>
+            {diagnosticPassed ? (
+              <div className="flex items-center gap-2">
+                <span className="font-medium">Système prêt pour la classification !</span>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="font-medium">Problèmes détectés :</p>
+                
+                {/* Status icons */}
+                <div className="grid gap-2 text-sm">
+                  <div className="flex items-center gap-2">
+                    {diagnosticResult.openaiConfigured === true ? (
+                      <CheckCircle className="h-4 w-4 text-success" />
+                    ) : diagnosticResult.openaiConfigured === false ? (
+                      <XCircle className="h-4 w-4 text-destructive" />
+                    ) : (
+                      <AlertCircle className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <span>OPENAI_API_KEY</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {diagnosticResult.hsCodesEnough ? (
+                      <CheckCircle className="h-4 w-4 text-success" />
+                    ) : (
+                      <XCircle className="h-4 w-4 text-destructive" />
+                    )}
+                    <span>Codes HS ≥ 100</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {diagnosticResult.kbChunksEnough ? (
+                      <CheckCircle className="h-4 w-4 text-success" />
+                    ) : (
+                      <XCircle className="h-4 w-4 text-destructive" />
+                    )}
+                    <span>KB Chunks ≥ 100</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {diagnosticResult.hsEmbeddingsOk ? (
+                      <CheckCircle className="h-4 w-4 text-success" />
+                    ) : (
+                      <AlertTriangle className="h-4 w-4 text-warning" />
+                    )}
+                    <span>Embeddings HS ≥ 80%</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {diagnosticResult.kbEmbeddingsOk ? (
+                      <CheckCircle className="h-4 w-4 text-success" />
+                    ) : (
+                      <AlertTriangle className="h-4 w-4 text-warning" />
+                    )}
+                    <span>Embeddings KB ≥ 80%</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {diagnosticResult.sqlFunctionsOk === true ? (
+                      <CheckCircle className="h-4 w-4 text-success" />
+                    ) : diagnosticResult.sqlFunctionsOk === false ? (
+                      <XCircle className="h-4 w-4 text-destructive" />
+                    ) : (
+                      <AlertCircle className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <span>Fonctions SQL</span>
+                  </div>
+                </div>
+                
+                {/* Error messages */}
+                {diagnosticResult.errors.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="font-medium text-destructive">Erreurs :</p>
+                    <ul className="list-disc list-inside text-sm space-y-1">
+                      {diagnosticResult.errors.map((err, i) => (
+                        <li key={i}>{err}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                
+                {/* Warning messages */}
+                {diagnosticResult.warnings.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="font-medium text-warning">Avertissements :</p>
+                    <ul className="list-disc list-inside text-sm space-y-1">
+                      {diagnosticResult.warnings.map((warn, i) => (
+                        <li key={i}>{warn}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Action Buttons */}
+      <div className="flex justify-between">
+        <Button 
+          variant="outline"
+          onClick={runDiagnostic}
+          disabled={isDiagnosing}
+        >
+          {isDiagnosing ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <Stethoscope className="mr-2 h-4 w-4" />
+          )}
+          Diagnostiquer le système
+        </Button>
+        
         <Button 
           variant="outline" 
           onClick={fetchStats}

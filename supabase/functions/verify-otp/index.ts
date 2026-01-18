@@ -1,21 +1,23 @@
+import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { SignJWT } from "https://deno.land/x/jose@v4.14.4/index.ts";
 import { logger } from "../_shared/logger.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 import { createServiceClient, getUserRole } from "../_shared/auth.ts";
+import { 
+  PhoneSchema, 
+  OTPSchema, 
+  normalizePhone,
+  validateRequestBody,
+} from "../_shared/validation.ts";
 
-// Normalize phone to E.164 format
-function normalizePhone(phone: string): string {
-  let cleaned = phone.replace(/\D/g, "");
-  
-  if (cleaned.startsWith("0")) {
-    cleaned = "212" + cleaned.slice(1);
-  }
-  if (!cleaned.startsWith("212") && cleaned.length === 9) {
-    cleaned = "212" + cleaned;
-  }
-  
-  return "+" + cleaned;
-}
+// ============================================================================
+// INPUT VALIDATION
+// ============================================================================
+
+const VerifyOtpSchema = z.object({
+  phone: PhoneSchema,
+  otp: OTPSchema,
+});
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -23,17 +25,15 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { phone, otp } = await req.json();
-
-    if (!phone || !otp) {
-      return new Response(
-        JSON.stringify({ message: "Phone and OTP are required", code: "MISSING_PARAMS" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Validate request body using centralized validation
+    const validation = await validateRequestBody(req, VerifyOtpSchema);
+    if (!validation.success) {
+      return validation.error;
     }
 
-    const normalizedPhone = normalizePhone(phone);
-    logger.info(`[verify-otp] Verifying OTP for phone: ${normalizedPhone}`);
+    const { phone, otp } = validation.data;
+    const normalizedPhoneNumber = normalizePhone(phone);
+    logger.info(`[verify-otp] Verifying OTP for phone: ${normalizedPhoneNumber}`);
 
     const supabase = createServiceClient();
 
@@ -41,14 +41,14 @@ Deno.serve(async (req) => {
     const { data: otpRecord, error: fetchError } = await supabase
       .from("otp_codes")
       .select("*")
-      .eq("phone", normalizedPhone)
+      .eq("phone", normalizedPhoneNumber)
       .eq("verified", false)
       .order("created_at", { ascending: false })
       .limit(1)
       .single();
 
     if (fetchError || !otpRecord) {
-      logger.warn(`[verify-otp] No OTP found for phone: ${normalizedPhone}`);
+      logger.warn(`[verify-otp] No OTP found for phone: ${normalizedPhoneNumber}`);
       return new Response(
         JSON.stringify({ message: "Invalid or expired OTP", code: "INVALID_OTP" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -57,7 +57,7 @@ Deno.serve(async (req) => {
 
     // Check if OTP is expired
     if (new Date(otpRecord.expires_at) < new Date()) {
-      logger.warn(`[verify-otp] OTP expired for phone: ${normalizedPhone}`);
+      logger.warn(`[verify-otp] OTP expired for phone: ${normalizedPhoneNumber}`);
       return new Response(
         JSON.stringify({ message: "OTP has expired. Please request a new code.", code: "OTP_EXPIRED" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -66,7 +66,7 @@ Deno.serve(async (req) => {
 
     // Check attempts (max 5)
     if (otpRecord.attempts >= 5) {
-      logger.warn(`[verify-otp] Too many attempts for phone: ${normalizedPhone}`);
+      logger.warn(`[verify-otp] Too many attempts for phone: ${normalizedPhoneNumber}`);
       return new Response(
         JSON.stringify({ message: "Too many failed attempts. Account temporarily locked.", code: "LOCKED" }),
         { status: 423, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
         .update({ attempts: otpRecord.attempts + 1 })
         .eq("id", otpRecord.id);
 
-      logger.warn(`[verify-otp] Invalid OTP attempt for phone: ${normalizedPhone}`);
+      logger.warn(`[verify-otp] Invalid OTP attempt for phone: ${normalizedPhoneNumber}`);
       return new Response(
         JSON.stringify({ message: "Invalid OTP code", code: "INVALID_OTP" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -94,25 +94,25 @@ Deno.serve(async (req) => {
       .update({ verified: true })
       .eq("id", otpRecord.id);
 
-    logger.info(`[verify-otp] OTP verified successfully for phone: ${normalizedPhone}`);
+    logger.info(`[verify-otp] OTP verified successfully for phone: ${normalizedPhoneNumber}`);
 
     // Find or create user profile
     let { data: profile } = await supabase
       .from("profiles")
       .select("id, user_id, company_id, phone")
-      .eq("phone", normalizedPhone)
+      .eq("phone", normalizedPhoneNumber)
       .single();
 
     let userId: string;
     let companyId: string;
 
     if (!profile) {
-      logger.info(`[verify-otp] Creating new user for phone: ${normalizedPhone}`);
+      logger.info(`[verify-otp] Creating new user for phone: ${normalizedPhoneNumber}`);
       
       // Create a new company
       const { data: newCompany, error: companyError } = await supabase
         .from("companies")
-        .insert({ name: `Company ${normalizedPhone}` })
+        .insert({ name: `Company ${normalizedPhoneNumber}` })
         .select("id")
         .single();
 
@@ -135,7 +135,7 @@ Deno.serve(async (req) => {
         .insert({
           user_id: userId,
           company_id: companyId,
-          phone: normalizedPhone,
+          phone: normalizedPhoneNumber,
         })
         .select("id, user_id, company_id, phone")
         .single();
@@ -182,7 +182,7 @@ Deno.serve(async (req) => {
     
     const token = await new SignJWT({
       sub: userId,
-      phone: normalizedPhone,
+      phone: normalizedPhoneNumber,
       company_id: companyId,
       role: userRole,
     })
@@ -201,7 +201,7 @@ Deno.serve(async (req) => {
           id: userId,
           company_id: companyId,
           role: userRole,
-          phone: normalizedPhone,
+          phone: normalizedPhoneNumber,
         },
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }

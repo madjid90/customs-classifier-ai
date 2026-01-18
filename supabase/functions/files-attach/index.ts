@@ -6,9 +6,14 @@ import {
   createServiceClient,
   type UserProfile
 } from "../_shared/auth.ts";
+import {
+  UUIDSchema,
+  validateRequestBody,
+  validatePathParam,
+} from "../_shared/validation.ts";
 
 // ============================================================================
-// INPUT VALIDATION (Zod)
+// INPUT VALIDATION (Zod) - File-specific schema
 // ============================================================================
 
 const AttachFileSchema = z.object({

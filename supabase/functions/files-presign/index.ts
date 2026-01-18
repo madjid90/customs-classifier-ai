@@ -1,16 +1,43 @@
+import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders, getCorsHeaders } from "../_shared/cors.ts";
+import { getCorsHeaders } from "../_shared/cors.ts";
 import { 
   authenticateRequest, 
   createServiceClient
 } from "../_shared/auth.ts";
+import {
+  UUIDSchema,
+  validateRequestBody,
+} from "../_shared/validation.ts";
 
-interface PresignRequest {
-  case_id: string | null;
-  file_type: string;
-  filename: string;
-  content_type: string;
-}
+// ============================================================================
+// INPUT VALIDATION (Zod) - Presign-specific schema
+// ============================================================================
+
+const FileTypeSchema = z.enum([
+  "tech_sheet", "invoice", "packing_list", "certificate", 
+  "dum", "photo_product", "photo_label", "photo_plate", 
+  "other", "admin_ingestion"
+], { errorMap: () => ({ message: "Type de fichier invalide" }) });
+
+const ContentTypeSchema = z.enum([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+], { errorMap: () => ({ message: "Type de contenu invalide. Autorisé: PDF, images, DOCX, XLSX" }) });
+
+const PresignRequestSchema = z.object({
+  case_id: UUIDSchema.nullable().optional(),
+  file_type: FileTypeSchema,
+  filename: z.string().min(1, "Nom de fichier requis").max(255, "Nom de fichier trop long"),
+  content_type: ContentTypeSchema,
+});
+
+type PresignRequest = z.infer<typeof PresignRequestSchema>;
 
 Deno.serve(async (req) => {
   const reqCorsHeaders = getCorsHeaders(req);
@@ -37,46 +64,13 @@ Deno.serve(async (req) => {
       );
     }
 
-    const body: PresignRequest = await req.json();
-    const { case_id, file_type, filename, content_type } = body;
-
-    // Validate required fields
-    if (!file_type || !filename || !content_type) {
-      return new Response(
-        JSON.stringify({ error: "file_type, filename, and content_type are required" }),
-        { status: 400, headers: { ...reqCorsHeaders, "Content-Type": "application/json" } }
-      );
+    // Validate request body using centralized validation
+    const validation = await validateRequestBody(req, PresignRequestSchema, reqCorsHeaders);
+    if (!validation.success) {
+      return validation.error;
     }
-
-    // Validate file type - matches case_file_type enum
-    const allowedFileTypes = [
-      "tech_sheet", "invoice", "packing_list", "certificate", 
-      "dum", "photo_product", "photo_label", "photo_plate", 
-      "other", "admin_ingestion"
-    ];
-    if (!allowedFileTypes.includes(file_type)) {
-      return new Response(
-        JSON.stringify({ error: `Invalid file_type. Allowed: ${allowedFileTypes.join(", ")}` }),
-        { status: 400, headers: { ...reqCorsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Validate content type
-    const allowedContentTypes = [
-      "application/pdf",
-      "image/jpeg",
-      "image/png",
-      "image/webp",
-      "image/gif",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ];
-    if (!allowedContentTypes.includes(content_type)) {
-      return new Response(
-        JSON.stringify({ error: "Invalid content_type. Allowed: PDF, images, DOCX, XLSX" }),
-        { status: 400, headers: { ...reqCorsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    
+    const { case_id, file_type, filename, content_type } = validation.data;
 
     // Generate unique file path
     const timestamp = Date.now();

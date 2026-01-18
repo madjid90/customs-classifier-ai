@@ -1,6 +1,9 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders, getCorsHeaders } from "../_shared/cors.ts";
+import { getCorsHeaders } from "../_shared/cors.ts";
+import { 
+  authenticateRequest, 
+  createServiceClient
+} from "../_shared/auth.ts";
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -11,30 +14,14 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Get auth token
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Authorization required" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Authenticate user using centralized auth
+    const authResult = await authenticateRequest(req);
+    if (!authResult.success) {
+      return authResult.error;
     }
-
-    // Verify JWT and get user
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
-    if (authError || !user) {
-      logger.error("Auth error:", authError);
-      return new Response(
-        JSON.stringify({ error: "Invalid token" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const { user, profile } = authResult.data;
+    const supabase = createServiceClient();
 
     if (req.method !== "POST") {
       return new Response(
@@ -62,21 +49,6 @@ Deno.serve(async (req) => {
     }
 
     logger.info(`Generating PDF for case: ${caseId}`);
-
-    // Get user's company
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("company_id")
-      .eq("user_id", user.id)
-      .single();
-
-    if (profileError || !profile) {
-      logger.error("Profile error:", profileError);
-      return new Response(
-        JSON.stringify({ error: "User profile not found" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
     // Get case details
     const { data: caseData, error: caseError } = await supabase
@@ -153,7 +125,7 @@ Deno.serve(async (req) => {
     await supabase.from("audit_logs").insert({
       case_id: caseId,
       user_id: user.id,
-      user_phone: user.phone || "unknown",
+      user_phone: profile.phone,
       action: "EXPORT",
       meta: { format: "pdf", timestamp: new Date().toISOString() },
     });
@@ -174,7 +146,7 @@ Deno.serve(async (req) => {
     const errorMessage = err instanceof Error ? err.message : "Internal server error";
     return new Response(
       JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
     );
   }
 });
@@ -500,19 +472,19 @@ function generatePdfHtml(data: PdfData): string {
           <div class="info-value">${formatDate(caseData.created_at)}</div>
         </div>
         <div class="info-item">
-          <div class="info-label">Statut</div>
-          <div class="info-value"><span class="status-badge">Validé</span></div>
+          <div class="info-label">Date de validation</div>
+          <div class="info-value">${caseData.validated_at ? formatDate(caseData.validated_at) : "N/A"}</div>
         </div>
       </div>
     </div>
 
     <div class="section">
-      <div class="section-title">Classification Recommandée</div>
+      <div class="section-title">Résultat de Classification</div>
       <div class="hs-code-box">
         <div class="hs-code-label">Code SH Recommandé</div>
         <div class="hs-code-value">${formatHsCode(classificationData.recommended_code)}</div>
         <div class="confidence-badge" style="background: ${getConfidenceColor(classificationData.confidence_level)}20; color: ${getConfidenceColor(classificationData.confidence_level)}">
-          Confiance: ${getConfidenceLabel(classificationData.confidence_level)} ${classificationData.confidence ? `(${Math.round(classificationData.confidence * 100)}%)` : ""}
+          Confiance ${getConfidenceLabel(classificationData.confidence_level)} (${Math.round((classificationData.confidence || 0) * 100)}%)
         </div>
       </div>
       
@@ -527,10 +499,10 @@ function generatePdfHtml(data: PdfData): string {
     <div class="section">
       <div class="section-title">Codes Alternatifs</div>
       <div class="alternatives-list">
-        ${alternatives.map((alt: { code?: string; confidence?: number; reason?: string }) => `
+        ${alternatives.map(alt => `
           <div class="alternative-item">
             <span class="alternative-code">${formatHsCode(alt.code || "")}</span>
-            <span class="alternative-conf">${alt.confidence ? `${Math.round(alt.confidence * 100)}%` : ""} ${alt.reason ? `- ${alt.reason}` : ""}</span>
+            <span class="alternative-conf">${Math.round((alt.confidence || 0) * 100)}% - ${alt.reason || ""}</span>
           </div>
         `).join("")}
       </div>
@@ -541,21 +513,22 @@ function generatePdfHtml(data: PdfData): string {
     <div class="section">
       <div class="section-title">Éléments de Preuve</div>
       <div class="evidence-list">
-        ${evidence.map((ev: { text?: string } | string) => `
-          <div class="evidence-item">${typeof ev === "string" ? ev : ev.text || JSON.stringify(ev)}</div>
-        `).join("")}
+        ${evidence.map(ev => {
+          const text = typeof ev === "string" ? ev : (ev as { text?: string }).text || "";
+          return `<div class="evidence-item">${text}</div>`;
+        }).join("")}
       </div>
     </div>
     ` : ""}
 
     ${Object.keys(answers).length > 0 ? `
     <div class="section">
-      <div class="section-title">Réponses au Questionnaire</div>
+      <div class="section-title">Questions & Réponses</div>
       <div class="answers-list">
-        ${Object.entries(answers).map(([question, answer]) => `
+        ${Object.entries(answers).map(([q, a]) => `
           <div class="answer-item">
-            <div class="answer-question">${question}</div>
-            <div class="answer-value">${answer}</div>
+            <div class="answer-question">${q}</div>
+            <div class="answer-value">${a}</div>
           </div>
         `).join("")}
       </div>
@@ -564,12 +537,12 @@ function generatePdfHtml(data: PdfData): string {
 
     ${files.length > 0 ? `
     <div class="section">
-      <div class="section-title">Documents Joints (${files.length})</div>
+      <div class="section-title">Documents Attachés</div>
       <div class="files-list">
-        ${files.map((file) => `
+        ${files.map(f => `
           <div class="file-item">
-            <span class="file-name">${file.filename}</span>
-            <span class="file-type">${fileTypeLabels[file.file_type] || file.file_type}</span>
+            <span class="file-name">${f.filename}</span>
+            <span class="file-type">${fileTypeLabels[f.file_type] || f.file_type}</span>
           </div>
         `).join("")}
       </div>
@@ -578,16 +551,9 @@ function generatePdfHtml(data: PdfData): string {
 
     <div class="footer">
       <p>Ce document a été généré automatiquement par le système de classification douanière.</p>
-      <p>Classification validée le ${caseData.validated_at ? formatDate(caseData.validated_at) : "N/A"}</p>
+      <p>Référence: ${caseData.id} • Classification effectuée le ${formatDate(classificationData.created_at)}</p>
     </div>
   </div>
-  
-  <script>
-    // Auto-trigger print dialog when opened
-    window.onload = function() {
-      window.print();
-    };
-  </script>
 </body>
 </html>`;
 }

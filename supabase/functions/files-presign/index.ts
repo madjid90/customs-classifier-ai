@@ -1,6 +1,9 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders } from "../_shared/cors.ts";
+import { corsHeaders, getCorsHeaders } from "../_shared/cors.ts";
+import { 
+  authenticateRequest, 
+  createServiceClient
+} from "../_shared/auth.ts";
 
 interface PresignRequest {
   case_id: string | null;
@@ -10,41 +13,27 @@ interface PresignRequest {
 }
 
 Deno.serve(async (req) => {
+  const reqCorsHeaders = getCorsHeaders(req);
+  
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { headers: reqCorsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Get auth token
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Authorization required" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Authenticate user using centralized auth
+    const authResult = await authenticateRequest(req);
+    if (!authResult.success) {
+      return authResult.error;
     }
-
-    // Verify JWT and get user
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
-    if (authError || !user) {
-      console.error("Auth error:", authError);
-      return new Response(
-        JSON.stringify({ error: "Invalid token" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const { user } = authResult.data;
+    const supabase = createServiceClient();
 
     if (req.method !== "POST") {
       return new Response(
         JSON.stringify({ error: "Method not allowed" }),
-        { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 405, headers: { ...reqCorsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -55,7 +44,7 @@ Deno.serve(async (req) => {
     if (!file_type || !filename || !content_type) {
       return new Response(
         JSON.stringify({ error: "file_type, filename, and content_type are required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...reqCorsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -68,7 +57,7 @@ Deno.serve(async (req) => {
     if (!allowedFileTypes.includes(file_type)) {
       return new Response(
         JSON.stringify({ error: `Invalid file_type. Allowed: ${allowedFileTypes.join(", ")}` }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...reqCorsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -85,7 +74,7 @@ Deno.serve(async (req) => {
     if (!allowedContentTypes.includes(content_type)) {
       return new Response(
         JSON.stringify({ error: "Invalid content_type. Allowed: PDF, images, DOCX, XLSX" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...reqCorsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -97,7 +86,7 @@ Deno.serve(async (req) => {
       ? `${case_id}/${file_type}/${timestamp}-${randomId}-${sanitizedFilename}`
       : `temp/${user.id}/${file_type}/${timestamp}-${randomId}-${sanitizedFilename}`;
 
-    console.log(`Generating presigned URL for: ${filePath}`);
+    logger.info(`Generating presigned URL for: ${filePath}`);
 
     // Create signed upload URL (valid for 1 hour)
     const { data: signedData, error: signedError } = await supabase.storage
@@ -105,10 +94,10 @@ Deno.serve(async (req) => {
       .createSignedUploadUrl(filePath);
 
     if (signedError) {
-      console.error("Error creating signed URL:", signedError);
+      logger.error("Error creating signed URL:", signedError);
       return new Response(
         JSON.stringify({ error: "Failed to generate upload URL" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 500, headers: { ...reqCorsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -122,7 +111,7 @@ Deno.serve(async (req) => {
       .from("case-files")
       .createSignedUrl(filePath, 60 * 60 * 24 * 7); // 7 days validity
 
-    console.log(`Presigned URL generated successfully for user ${user.id}`);
+    logger.info(`Presigned URL generated successfully for user ${user.id}`);
 
     return new Response(
       JSON.stringify({
@@ -133,16 +122,16 @@ Deno.serve(async (req) => {
       }),
       { 
         status: 200, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        headers: { ...reqCorsHeaders, "Content-Type": "application/json" } 
       }
     );
 
   } catch (err) {
-    console.error("Presign error:", err);
+    logger.error("Presign error:", err);
     const errorMessage = err instanceof Error ? err.message : "Internal server error";
     return new Response(
       JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
     );
   }
 });

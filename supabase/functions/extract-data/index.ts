@@ -1,6 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { corsHeaders } from "../_shared/cors.ts";
+import {
+  validateRequestBody,
+  ExtractDataRequestSchema,
+} from "../_shared/validation.ts";
 
 // ============================================================================
 // CONFIGURATION - Modèles OpenAI depuis les secrets
@@ -20,16 +24,6 @@ function getOpenAIConfig() {
 // ============================================================================
 // TYPES
 // ============================================================================
-
-interface ExtractionRequest {
-  type: "hs_codes" | "dum_records" | "kb_chunks";
-  content: string;
-  options?: {
-    version_label?: string;
-    chunk_size?: number;
-    language?: string;
-  };
-}
 
 interface HSCodeExtracted {
   code: string;
@@ -60,7 +54,7 @@ interface KBChunkExtracted {
 // SYSTEM PROMPTS
 // ============================================================================
 
-const SYSTEM_PROMPTS = {
+const SYSTEM_PROMPTS: Record<string, string> = {
   hs_codes: `Tu es un expert en nomenclature douanière. Extrait les codes HS et leurs libellés depuis le texte fourni.
 
 RÈGLES:
@@ -273,14 +267,13 @@ Deno.serve(async (req) => {
       );
     }
 
-    const { type, content, options = {} } = await req.json() as ExtractionRequest;
-
-    if (!type || !content) {
-      return new Response(
-        JSON.stringify({ message: "Type et contenu requis" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Validate request body with Zod
+    const validation = await validateRequestBody(req, ExtractDataRequestSchema, corsHeaders);
+    if (!validation.success) {
+      return validation.error;
     }
+
+    const { type, content, options = {} } = validation.data;
 
     logger.info(`[extract-data] Processing ${type} extraction, content length: ${content.length}`);
 

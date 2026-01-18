@@ -5,6 +5,16 @@ import {
   authenticateRequest, 
   createServiceClient
 } from "../_shared/auth.ts";
+import {
+  validateQueryParams,
+  validateRequestBody,
+  validatePathParam,
+  IngestionListQuerySchema,
+  IngestionRegisterSchema,
+  EtlRunSchema,
+  KBSearchQuerySchema,
+  UUIDSchema,
+} from "../_shared/validation.ts";
 
 // deno-lint-ignore no-explicit-any
 type SupabaseClientAny = SupabaseClient<any, any, any>;
@@ -36,34 +46,34 @@ Deno.serve(async (req) => {
 
     // Route to appropriate handler
     if (action === "ingestion/list" && req.method === "GET") {
-      return await handleIngestionList(supabase, url);
+      return await handleIngestionList(supabase, url, reqCorsHeaders);
     }
     
     if (action === "ingestion/register" && req.method === "POST") {
-      return await handleIngestionRegister(supabase, req, user.id);
+      return await handleIngestionRegister(supabase, req, user.id, reqCorsHeaders);
     }
     
     if (action === "etl/run" && req.method === "POST") {
-      return await handleEtlRun(supabase, req, user.id);
+      return await handleEtlRun(supabase, req, user.id, reqCorsHeaders);
     }
     
     if (action.startsWith("ingestion/") && action.endsWith("/logs") && req.method === "GET") {
       const ingestionId = pathParts[2];
-      return await handleIngestionLogs(supabase, ingestionId);
+      return await handleIngestionLogs(supabase, ingestionId, reqCorsHeaders);
     }
     
     if (action.startsWith("ingestion/") && action.endsWith("/retry") && req.method === "POST") {
       const ingestionId = pathParts[2];
-      return await handleIngestionRetry(supabase, ingestionId, user.id);
+      return await handleIngestionRetry(supabase, ingestionId, user.id, reqCorsHeaders);
     }
     
     if (action.startsWith("ingestion/") && action.endsWith("/disable") && req.method === "POST") {
       const ingestionId = pathParts[2];
-      return await handleIngestionDisable(supabase, ingestionId, user.id);
+      return await handleIngestionDisable(supabase, ingestionId, user.id, reqCorsHeaders);
     }
     
     if (action === "kb/search" && req.method === "GET") {
-      return await handleKbSearch(supabase, url);
+      return await handleKbSearch(supabase, url, reqCorsHeaders);
     }
 
     return new Response(
@@ -82,11 +92,18 @@ Deno.serve(async (req) => {
 });
 
 // Handler: List ingestion files
-async function handleIngestionList(supabase: SupabaseClientAny, url: URL) {
-  const limit = parseInt(url.searchParams.get("limit") || "50");
-  const offset = parseInt(url.searchParams.get("offset") || "0");
-  const status = url.searchParams.get("status");
-  const source = url.searchParams.get("source");
+async function handleIngestionList(
+  supabase: SupabaseClientAny, 
+  url: URL,
+  headers: Record<string, string>
+) {
+  // Validate query params with Zod
+  const validation = validateQueryParams(url, IngestionListQuerySchema, headers);
+  if (!validation.success) {
+    return validation.error;
+  }
+  
+  const { limit, offset, status, source } = validation.data;
 
   let query = supabase
     .from("ingestion_files")
@@ -107,13 +124,13 @@ async function handleIngestionList(supabase: SupabaseClientAny, url: URL) {
     logger.error("List ingestion error:", error);
     return new Response(
       JSON.stringify({ error: "Failed to list ingestion files" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
   return new Response(
     JSON.stringify({ data, total: count, limit, offset }),
-    { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    { status: 200, headers: { ...headers, "Content-Type": "application/json" } }
   );
 }
 
@@ -121,26 +138,16 @@ async function handleIngestionList(supabase: SupabaseClientAny, url: URL) {
 async function handleIngestionRegister(
   supabase: SupabaseClientAny, 
   req: Request, 
-  userId: string
+  userId: string,
+  headers: Record<string, string>
 ) {
-  const body = await req.json();
-  const { source, version_label, file_url, filename } = body;
-
-  if (!source || !version_label || !file_url) {
-    return new Response(
-      JSON.stringify({ error: "source, version_label, and file_url are required" }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+  // Validate request body with Zod
+  const validation = await validateRequestBody(req, IngestionRegisterSchema, headers);
+  if (!validation.success) {
+    return validation.error;
   }
 
-  const allowedSources = ["DOUANE_TARIF", "RGC", "NOTES_EXPLICATIVES", "MANUAL"];
-  if (!allowedSources.includes(source)) {
-    return new Response(
-      JSON.stringify({ error: `Invalid source. Allowed: ${allowedSources.join(", ")}` }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  }
-
+  const { source, version_label, file_url, filename } = validation.data;
   const finalFilename = filename || file_url.split("/").pop() || `ingestion-${Date.now()}`;
 
   const { data, error } = await supabase
@@ -160,7 +167,7 @@ async function handleIngestionRegister(
     logger.error("Register ingestion error:", error);
     return new Response(
       JSON.stringify({ error: "Failed to register ingestion" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
@@ -168,7 +175,7 @@ async function handleIngestionRegister(
 
   return new Response(
     JSON.stringify(data),
-    { status: 201, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    { status: 201, headers: { ...headers, "Content-Type": "application/json" } }
   );
 }
 
@@ -176,17 +183,16 @@ async function handleIngestionRegister(
 async function handleEtlRun(
   supabase: SupabaseClientAny, 
   req: Request,
-  userId: string
+  userId: string,
+  headers: Record<string, string>
 ) {
-  const body = await req.json();
-  const { ingestion_id } = body;
-
-  if (!ingestion_id) {
-    return new Response(
-      JSON.stringify({ error: "ingestion_id is required" }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+  // Validate request body with Zod
+  const validation = await validateRequestBody(req, EtlRunSchema, headers);
+  if (!validation.success) {
+    return validation.error;
   }
+
+  const { ingestion_id } = validation.data;
 
   const { data: ingestion, error: fetchError } = await supabase
     .from("ingestion_files")
@@ -197,14 +203,14 @@ async function handleEtlRun(
   if (fetchError || !ingestion) {
     return new Response(
       JSON.stringify({ error: "Ingestion file not found" }),
-      { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 404, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
   if (ingestion.status === "PROCESSING") {
     return new Response(
       JSON.stringify({ error: "ETL is already running for this ingestion" }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 400, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
@@ -222,14 +228,14 @@ async function handleEtlRun(
     logger.error("Update status error:", updateError);
     return new Response(
       JSON.stringify({ error: "Failed to start ETL" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
   await supabase.from("ingestion_logs").insert({
     ingestion_id,
-    step: "EXTRACT",
-    level: "INFO",
+    step: "extract",
+    level: "info",
     message: `ETL started by admin ${userId}`,
   });
 
@@ -241,39 +247,39 @@ async function handleEtlRun(
       ingestion_id,
       status: "PROCESSING"
     }),
-    { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    { status: 200, headers: { ...headers, "Content-Type": "application/json" } }
   );
 }
 
 // Handler: Get ingestion logs
 async function handleIngestionLogs(
   supabase: SupabaseClientAny, 
-  ingestionId: string
+  ingestionId: string,
+  headers: Record<string, string>
 ) {
-  if (!ingestionId) {
-    return new Response(
-      JSON.stringify({ error: "Ingestion ID required" }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+  // Validate path param with Zod
+  const validation = validatePathParam(ingestionId, "ingestion_id", UUIDSchema, headers);
+  if (!validation.success) {
+    return validation.error;
   }
 
   const { data, error } = await supabase
     .from("ingestion_logs")
     .select("*")
-    .eq("ingestion_id", ingestionId)
+    .eq("ingestion_id", validation.data)
     .order("created_at", { ascending: true });
 
   if (error) {
     logger.error("Get logs error:", error);
     return new Response(
       JSON.stringify({ error: "Failed to get logs" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
   return new Response(
     JSON.stringify({ data }),
-    { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    { status: 200, headers: { ...headers, "Content-Type": "application/json" } }
   );
 }
 
@@ -281,32 +287,34 @@ async function handleIngestionLogs(
 async function handleIngestionRetry(
   supabase: SupabaseClientAny, 
   ingestionId: string,
-  userId: string
+  userId: string,
+  headers: Record<string, string>
 ) {
-  if (!ingestionId) {
-    return new Response(
-      JSON.stringify({ error: "Ingestion ID required" }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+  // Validate path param with Zod
+  const validation = validatePathParam(ingestionId, "ingestion_id", UUIDSchema, headers);
+  if (!validation.success) {
+    return validation.error;
   }
+
+  const validId = validation.data;
 
   const { data: ingestion, error: fetchError } = await supabase
     .from("ingestion_files")
     .select("*")
-    .eq("id", ingestionId)
+    .eq("id", validId)
     .single();
 
   if (fetchError || !ingestion) {
     return new Response(
       JSON.stringify({ error: "Ingestion file not found" }),
-      { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 404, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
-  if (ingestion.status !== "FAILED") {
+  if (ingestion.status !== "ERROR") {
     return new Response(
       JSON.stringify({ error: "Can only retry failed ingestions" }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 400, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
@@ -318,32 +326,32 @@ async function handleIngestionRetry(
       error_message: null,
       updated_at: new Date().toISOString()
     })
-    .eq("id", ingestionId);
+    .eq("id", validId);
 
   if (updateError) {
     logger.error("Retry error:", updateError);
     return new Response(
       JSON.stringify({ error: "Failed to retry ingestion" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
   await supabase.from("ingestion_logs").insert({
-    ingestion_id: ingestionId,
-    step: "EXTRACT",
-    level: "INFO",
+    ingestion_id: validId,
+    step: "extract",
+    level: "info",
     message: `Ingestion reset for retry by admin ${userId}`,
   });
 
-  logger.info(`Ingestion retried: ${ingestionId} by user ${userId}`);
+  logger.info(`Ingestion retried: ${validId} by user ${userId}`);
 
   return new Response(
     JSON.stringify({ 
       message: "Ingestion reset for retry",
-      ingestion_id: ingestionId,
+      ingestion_id: validId,
       status: "NEW"
     }),
-    { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    { status: 200, headers: { ...headers, "Content-Type": "application/json" } }
   );
 }
 
@@ -351,25 +359,27 @@ async function handleIngestionRetry(
 async function handleIngestionDisable(
   supabase: SupabaseClientAny, 
   ingestionId: string,
-  userId: string
+  userId: string,
+  headers: Record<string, string>
 ) {
-  if (!ingestionId) {
-    return new Response(
-      JSON.stringify({ error: "Ingestion ID required" }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+  // Validate path param with Zod
+  const validation = validatePathParam(ingestionId, "ingestion_id", UUIDSchema, headers);
+  if (!validation.success) {
+    return validation.error;
   }
+
+  const validId = validation.data;
 
   const { data: ingestion, error: fetchError } = await supabase
     .from("ingestion_files")
     .select("*")
-    .eq("id", ingestionId)
+    .eq("id", validId)
     .single();
 
   if (fetchError || !ingestion) {
     return new Response(
       JSON.stringify({ error: "Ingestion file not found" }),
-      { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 404, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
@@ -379,53 +389,54 @@ async function handleIngestionDisable(
       status: "DISABLED",
       updated_at: new Date().toISOString()
     })
-    .eq("id", ingestionId);
+    .eq("id", validId);
 
   if (updateError) {
     logger.error("Disable error:", updateError);
     return new Response(
       JSON.stringify({ error: "Failed to disable ingestion" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
   await supabase.from("ingestion_logs").insert({
-    ingestion_id: ingestionId,
-    step: "LOAD",
-    level: "WARN",
+    ingestion_id: validId,
+    step: "index",
+    level: "warning",
     message: `Ingestion disabled by admin ${userId}`,
   });
 
-  logger.info(`Ingestion disabled: ${ingestionId} by user ${userId}`);
+  logger.info(`Ingestion disabled: ${validId} by user ${userId}`);
 
   return new Response(
     JSON.stringify({ 
       message: "Ingestion disabled",
-      ingestion_id: ingestionId,
+      ingestion_id: validId,
       status: "DISABLED"
     }),
-    { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    { status: 200, headers: { ...headers, "Content-Type": "application/json" } }
   );
 }
 
 // Handler: Search KB chunks
-async function handleKbSearch(supabase: SupabaseClientAny, url: URL) {
-  const query = url.searchParams.get("q");
-  const limit = parseInt(url.searchParams.get("limit") || "20");
-  const source = url.searchParams.get("source");
-
-  if (!query) {
-    return new Response(
-      JSON.stringify({ error: "Search query 'q' is required" }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+async function handleKbSearch(
+  supabase: SupabaseClientAny, 
+  url: URL,
+  headers: Record<string, string>
+) {
+  // Validate query params with Zod
+  const validation = validateQueryParams(url, KBSearchQuerySchema, headers);
+  if (!validation.success) {
+    return validation.error;
   }
+
+  const { q, limit, source } = validation.data;
 
   // Use ilike search for simplicity
   let dbQuery = supabase
     .from("kb_chunks")
     .select("id, doc_id, ref, source, text, version_label, created_at")
-    .ilike("text", `%${query}%`)
+    .ilike("text", `%${q}%`)
     .limit(limit);
 
   if (source) {
@@ -438,12 +449,12 @@ async function handleKbSearch(supabase: SupabaseClientAny, url: URL) {
     logger.error("KB search error:", error);
     return new Response(
       JSON.stringify({ error: "Search failed" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...headers, "Content-Type": "application/json" } }
     );
   }
 
   return new Response(
-    JSON.stringify({ data, query, total: data?.length || 0 }),
-    { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    JSON.stringify({ data, query: q, total: data?.length || 0 }),
+    { status: 200, headers: { ...headers, "Content-Type": "application/json" } }
   );
 }

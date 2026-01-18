@@ -51,6 +51,7 @@ interface ImportResponse {
   errors: string[];
   ambiguities: Ambiguity[];
   hs_sync_triggered?: boolean;
+  embeddings_triggered?: boolean;
 }
 
 // ============================================================================
@@ -702,15 +703,29 @@ serve(async (req) => {
       errors: importResult.errors,
       ambiguities: allAmbiguities.slice(0, 50), // Limiter la réponse
       hs_sync_triggered: source === "lois" && totalChunks > 0,
+      embeddings_triggered: totalChunks > 0,
     };
 
     // ========================================================================
-    // AUTO-SYNC HS FROM LAWS: Déclencher en background après import de lois
+    // BACKGROUND TASKS: Auto-trigger embeddings and sync after import
     // ========================================================================
+    
+    // Helper function to run background tasks
+    const runBackgroundTask = (task: () => Promise<void>) => {
+      // @ts-ignore - EdgeRuntime est disponible dans Deno Deploy
+      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+        // @ts-ignore
+        EdgeRuntime.waitUntil(task());
+      } else {
+        // Fallback: exécuter sans attendre
+        task();
+      }
+    };
+
+    // 1. Auto-sync HS from laws (for lois source)
     if (source === "lois" && totalChunks > 0) {
       console.log(`[import-kb] Triggering background HS sync for version: ${version_label}`);
       
-      // Background task pour synchroniser les codes HS
       const syncTask = async () => {
         try {
           const syncResponse = await fetch(`${SUPABASE_URL}/functions/v1/sync-hs-from-laws`, {
@@ -737,15 +752,43 @@ serve(async (req) => {
         }
       };
       
-      // Utiliser EdgeRuntime.waitUntil pour exécuter en background
-      // @ts-ignore - EdgeRuntime est disponible dans Deno Deploy
-      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
-        // @ts-ignore
-        EdgeRuntime.waitUntil(syncTask());
-      } else {
-        // Fallback: exécuter sans attendre
-        syncTask();
-      }
+      runBackgroundTask(syncTask);
+    }
+
+    // 2. Auto-generate embeddings for new KB chunks
+    if (totalChunks > 0) {
+      console.log(`[import-kb] Triggering background KB embeddings generation`);
+      
+      const embeddingsTask = async () => {
+        try {
+          // Small delay to ensure chunks are committed
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          const embResponse = await fetch(`${SUPABASE_URL}/functions/v1/generate-embeddings`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+            },
+            body: JSON.stringify({
+              mode: "batch",
+              target: "kb",
+              batch_size: Math.min(totalChunks, 50),
+            }),
+          });
+          
+          if (embResponse.ok) {
+            const embResult = await embResponse.json();
+            console.log(`[import-kb] KB embeddings generated: ${embResult.processed} processed, ${embResult.remaining} remaining`);
+          } else {
+            console.error(`[import-kb] KB embeddings failed: ${embResponse.status}`);
+          }
+        } catch (e) {
+          console.error("[import-kb] KB embeddings error:", e);
+        }
+      };
+      
+      runBackgroundTask(embeddingsTask);
     }
 
     console.log(`Import complete: ${totalChunks} chunks, ${importResult.errors.length} errors, ${allAmbiguities.length} ambiguities`);

@@ -20,6 +20,8 @@ export interface ImportResult {
   updated: number;
   errors: number;
   warnings: string[];
+  embeddings_triggered?: boolean;
+  enrichment_triggered?: boolean;
 }
 
 export interface HSCodeStats {

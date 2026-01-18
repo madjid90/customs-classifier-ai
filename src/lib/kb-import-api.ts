@@ -38,6 +38,8 @@ export interface ImportKBResponse {
   results: ChunkResult[];
   errors: string[];
   ambiguities: Ambiguity[];
+  hs_sync_triggered?: boolean;
+  embeddings_triggered?: boolean;
 }
 
 export interface EmbeddingStats {

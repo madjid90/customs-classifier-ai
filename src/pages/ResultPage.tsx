@@ -4,6 +4,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { Breadcrumbs } from "@/components/layout/Breadcrumbs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge, ConfidenceBadge } from "@/components/ui/status-badge";
 import { getCaseDetail, validateCase, exportPdf } from "@/lib/api-client";
 import { CaseDetailResponse, EvidenceItem, Alternative, INGESTION_SOURCE_LABELS } from "@/lib/types";
@@ -178,8 +179,129 @@ export default function ResultPage() {
   if (isLoading) {
     return (
       <AppLayout>
-        <div className="flex min-h-[50vh] items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <div className="container py-8">
+          <Skeleton className="h-6 w-48 mb-6" />
+          
+          <div className="mt-6 grid gap-6 lg:grid-cols-3">
+            {/* Main content skeleton */}
+            <div className="space-y-6 lg:col-span-2">
+              {/* HS Code Result skeleton */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <Skeleton className="h-6 w-6 rounded" />
+                      <div className="space-y-2">
+                        <Skeleton className="h-5 w-48" />
+                        <Skeleton className="h-4 w-32" />
+                      </div>
+                    </div>
+                    <Skeleton className="h-6 w-24 rounded-full" />
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {/* Main code skeleton */}
+                  <div className="rounded-lg border bg-muted/30 p-6 text-center">
+                    <Skeleton className="h-4 w-40 mx-auto mb-2" />
+                    <Skeleton className="h-10 w-56 mx-auto" />
+                    <Skeleton className="h-6 w-24 mx-auto mt-3 rounded-full" />
+                  </div>
+                  
+                  {/* Justification skeleton */}
+                  <div>
+                    <Skeleton className="h-5 w-24 mb-2" />
+                    <Skeleton className="h-4 w-full" />
+                    <Skeleton className="h-4 w-3/4 mt-1" />
+                  </div>
+                  
+                  {/* Actions skeleton */}
+                  <div className="flex flex-wrap gap-2">
+                    <Skeleton className="h-9 w-32" />
+                    <Skeleton className="h-9 w-36" />
+                    <Skeleton className="h-9 w-24" />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Alternatives skeleton */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <Skeleton className="h-5 w-36" />
+                  <Skeleton className="h-4 w-48 mt-1" />
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {[1, 2].map((i) => (
+                      <div key={i} className="flex items-center justify-between rounded-lg border p-3">
+                        <div className="space-y-1">
+                          <Skeleton className="h-5 w-32" />
+                          <Skeleton className="h-4 w-48" />
+                        </div>
+                        <Skeleton className="h-4 w-12" />
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Evidence skeleton */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <Skeleton className="h-5 w-36" />
+                  <Skeleton className="h-4 w-56 mt-1" />
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {[1, 2].map((i) => (
+                      <div key={i} className="rounded-lg border p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Skeleton className="h-4 w-4" />
+                          <Skeleton className="h-4 w-24" />
+                          <Skeleton className="h-3 w-16" />
+                        </div>
+                        <Skeleton className="h-4 w-full" />
+                        <Skeleton className="h-4 w-2/3 mt-1" />
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Sidebar skeleton */}
+            <div className="space-y-6">
+              <Card>
+                <CardHeader className="pb-2">
+                  <Skeleton className="h-4 w-24" />
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="flex justify-between">
+                      <Skeleton className="h-4 w-20" />
+                      <Skeleton className="h-4 w-28" />
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <Skeleton className="h-4 w-36" />
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {[1, 2].map((i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <Skeleton className="h-4 w-4" />
+                        <Skeleton className="h-4 flex-1" />
+                        <Skeleton className="h-4 w-4" />
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
         </div>
       </AppLayout>
     );

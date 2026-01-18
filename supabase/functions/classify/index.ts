@@ -49,6 +49,40 @@ function getOpenAIConfig() {
 }
 
 // ============================================================================
+// TIMEOUT MANAGEMENT
+// ============================================================================
+
+const CLASSIFY_TIMEOUT_MS = 25000; // 25 secondes (marge avant 30s Supabase)
+const EXTRACTION_TIMEOUT_MS = 10000; // 10s pour extraction vision
+const EMBEDDING_TIMEOUT_MS = 5000; // 5s pour embedding
+const DECISION_TIMEOUT_MS = 12000; // 12s pour décision
+
+class TimeoutError extends Error {
+  constructor(operation: string, timeoutMs: number) {
+    super(`Timeout: ${operation} a dépassé ${timeoutMs}ms`);
+    this.name = "TimeoutError";
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, operation: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new TimeoutError(operation, ms));
+    }, ms);
+    
+    promise
+      .then(result => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch(err => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+// ============================================================================
 // RATE LIMITING
 // ============================================================================
 
@@ -343,10 +377,14 @@ Réponds UNIQUEMENT en JSON strict:
   }
 
   try {
-    const aiResponse = await callOpenAI(
-      [{ role: "user", content }],
-      config.modelVision,
-      0.1
+    const aiResponse = await withTimeout(
+      callOpenAI(
+        [{ role: "user", content }],
+        config.modelVision,
+        0.1
+      ),
+      EXTRACTION_TIMEOUT_MS,
+      "extraction vision"
     );
     
     const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
@@ -487,7 +525,11 @@ async function generateCandidatesList(
       console.log(`[SÉMANTIQUE] Génération embedding pour: "${searchText.substring(0, 100)}..."`);
       
       // Générer embedding
-      const searchEmbedding = await generateEmbedding(searchText);
+      const searchEmbedding = await withTimeout(
+        generateEmbedding(searchText),
+        EMBEDDING_TIMEOUT_MS,
+        "génération embedding candidats"
+      );
       
       if (searchEmbedding.length > 0) {
         // Recherche sémantique via match_hs_codes
@@ -711,7 +753,11 @@ async function searchEvidenceRAG(
 
   try {
     // Générer embedding
-    const queryEmbedding = await generateEmbedding(queryText);
+    const queryEmbedding = await withTimeout(
+      generateEmbedding(queryText),
+      EMBEDDING_TIMEOUT_MS,
+      "génération embedding RAG"
+    );
     
     if (queryEmbedding.length === 0) {
       console.log("Embedding vide");
@@ -828,13 +874,17 @@ ${evidence.length > 0
   : "⚠️ AUCUNE EVIDENCE - RÉPONDS AVEC status='LOW_CONFIDENCE' ou 'NEED_INFO'"
 }`;
 
-  const aiResponse = await callOpenAI(
-    [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    config.modelReasoning,
-    0.1
+  const aiResponse = await withTimeout(
+    callOpenAI(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      config.modelReasoning,
+      0.1
+    ),
+    DECISION_TIMEOUT_MS,
+    "décision classification"
   );
 
   const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
@@ -962,6 +1012,8 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const startTime = Date.now();
+  
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
@@ -970,7 +1022,8 @@ serve(async (req) => {
     const { case_id } = body;
 
     console.log("╔═══════════════════════════════════════════════════════╗");
-    console.log("║    PIPELINE CLASSIFICATION ANTI-HALLUCINATION v3      ║");
+    console.log("║    PIPELINE CLASSIFICATION ANTI-HALLUCINATION v4      ║");
+    console.log("║    (avec gestion timeout - limite 25s)                ║");
     console.log("╚═══════════════════════════════════════════════════════╝");
     console.log("Case:", case_id);
 
@@ -1233,22 +1286,58 @@ serve(async (req) => {
       },
     });
 
+    const duration = Date.now() - startTime;
     console.log("╔═══════════════════════════════════════════════════════╗");
     console.log(`║ PIPELINE TERMINÉ: ${finalResult.status.padEnd(37)}║`);
     console.log(`║ Vérification: ${verification.passed ? "PASS" : "FAIL"}`.padEnd(56) + "║");
+    console.log(`║ Durée: ${duration}ms`.padEnd(56) + "║");
     console.log("╚═══════════════════════════════════════════════════════╝");
 
     return new Response(
-      JSON.stringify({ success: true, result: finalResult, verification }),
+      JSON.stringify({ success: true, result: finalResult, verification, duration_ms: duration }),
       { headers: { ...corsHeaders, ...rateLimitHeaders, "Content-Type": "application/json" } }
     );
 
   } catch (error) {
-    console.error("Pipeline error:", error);
+    const duration = Date.now() - startTime;
+    console.error(`Pipeline error après ${duration}ms:`, error);
+    
+    // Gestion spéciale timeout
+    if (error instanceof TimeoutError || (error instanceof Error && error.message?.includes("Timeout"))) {
+      console.error(`TIMEOUT après ${duration}ms:`, error.message);
+      
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "Classification timeout",
+          message: "La classification a pris trop de temps. Réessayez avec moins de documents ou simplifiez la description.",
+          duration_ms: duration,
+          result: {
+            status: "ERROR",
+            error_message: `Timeout - classification trop longue (${duration}ms)`,
+            recommended_code: null,
+            confidence: null,
+            confidence_level: null,
+            justification_short: null,
+            alternatives: [],
+            evidence: [],
+            next_question: null,
+            verification: null,
+            product_profile: null,
+            candidates_count: 0,
+            answers: {},
+          },
+        }),
+        { status: 504, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    // Autres erreurs
     return new Response(
       JSON.stringify({
         success: false,
         error: error instanceof Error ? error.message : "Erreur inconnue",
+        duration_ms: duration,
         result: {
           status: "ERROR",
           error_message: error instanceof Error ? error.message : "Erreur inconnue",

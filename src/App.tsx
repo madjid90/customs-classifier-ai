@@ -12,6 +12,7 @@ import AnalyzeCasePage from "@/pages/AnalyzeCase";
 import ResultPage from "@/pages/ResultPage";
 import HistoryPage from "@/pages/History";
 import AdminPage from "@/pages/Admin";
+import MonitoringPage from "@/pages/Monitoring";
 import NotFound from "@/pages/NotFound";
 
 // Dev-only lazy import
@@ -35,6 +36,7 @@ const App = () => (
             <Route path="/cases/:caseId/result" element={<ResultPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/monitoring" element={<MonitoringPage />} />
             {import.meta.env.DEV && (
               <Route path="/dev/openapi-check" element={
                 <Suspense fallback={<div className="p-8">Loading...</div>}>

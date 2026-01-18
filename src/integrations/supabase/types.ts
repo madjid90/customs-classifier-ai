@@ -652,6 +652,41 @@ export type Database = {
           text: string
         }[]
       }
+      get_classification_stats: {
+        Args: never
+        Returns: {
+          avg_confidence: number
+          avg_confidence_done: number
+          classifications_this_month: number
+          classifications_this_week: number
+          classifications_today: number
+          high_confidence_count: number
+          low_confidence_count: number
+          medium_confidence_count: number
+          status_done: number
+          status_error: number
+          status_low_confidence: number
+          status_need_info: number
+          total_classifications: number
+        }[]
+      }
+      get_classification_trend: {
+        Args: { days_back?: number }
+        Returns: {
+          day: string
+          done_count: number
+          error_count: number
+          low_confidence_count: number
+          need_info_count: number
+        }[]
+      }
+      get_evidence_stats: {
+        Args: never
+        Returns: {
+          source_name: string
+          usage_count: number
+        }[]
+      }
       get_ingestion_stats: {
         Args: never
         Returns: {

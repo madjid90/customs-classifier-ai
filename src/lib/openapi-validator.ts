@@ -19,8 +19,8 @@ export interface ValidatorConfig {
 
 const DEFAULT_CONFIG: ValidatorConfig = {
   enabled: import.meta.env.DEV,
-  strict: false,
-  logLevel: "warn",
+  strict: true, // Block all non-conforming responses
+  logLevel: "error",
   excludePaths: ["/admin/"],
   criticalPaths: ["/classify"],
 };

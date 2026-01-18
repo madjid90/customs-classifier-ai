@@ -63,3 +63,6 @@ verify_jwt = false
 
 [functions.extract-data]
 verify_jwt = false
+
+[functions.generate-synthetic-data]
+verify_jwt = false

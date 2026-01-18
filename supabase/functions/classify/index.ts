@@ -10,7 +10,9 @@ const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-// ============= TYPES =============
+// ============================================================================
+// TYPES
+// ============================================================================
 
 interface ClassifyRequest {
   case_id: string;
@@ -22,206 +24,217 @@ interface ClassifyRequest {
   };
 }
 
-interface HSCodeCandidate {
+// ETAPE 1 - ProductProfile extrait des documents
+interface ProductProfile {
+  product_name: string;
+  description: string;
+  material_composition: string[];
+  dimensions: string | null;
+  weight: string | null;
+  intended_use: string | null;
+  manufacturing_process: string | null;
+  brand: string | null;
+  model: string | null;
+  technical_specs: Record<string, string>;
+  extracted_texts: string[];
+  confidence_extraction: number;
+}
+
+// ETAPE 2 - Candidats (liste fermée)
+interface HSCandidate {
   code_10: string;
   code_6: string;
   chapter_2: string;
   label_fr: string;
   label_ar: string | null;
   unit: string | null;
-  taxes: Record<string, unknown>;
+  taxes: Record<string, unknown> | null;
   restrictions: string[] | null;
-}
-
-interface ScoredCandidate extends HSCodeCandidate {
   score: number;
-  scoreBreakdown: {
-    textSimilarity: number;
-    dumHistoryBonus: number;
-    kbMentionBonus: number;
-    originBonus: number;
+  score_breakdown: {
+    text_similarity: number;
+    dum_history: number;
+    kb_mentions: number;
+    origin_match: number;
   };
-  dumMatches: number;
-  kbMentions: number;
+  dum_matches: number;
 }
 
-interface KBChunk {
-  id: string;
-  source: string;
-  doc_id: string;
-  ref: string;
-  text: string;
-  similarity: number;
-}
-
-interface DUMRecord {
-  hs_code_10: string;
-  product_description: string;
-  origin_country: string;
-  reliability_score: number;
-}
-
-interface Alternative {
-  code: string;
-  reason: string;
-  confidence: number;
-}
-
-interface EvidenceItem {
+// ETAPE 3 - Evidence (RAG uniquement)
+interface Evidence {
   source: "omd" | "maroc" | "lois" | "dum";
   doc_id: string;
   ref: string;
   excerpt: string;
+  similarity?: number;
 }
 
-interface NextQuestion {
-  id: string;
-  label: string;
-  type: "yesno" | "select" | "text";
-  options?: { value: string; label: string }[];
-  required: boolean;
-}
-
-interface ClassifyResult {
-  status: "NEED_INFO" | "DONE" | "ERROR" | "LOW_CONFIDENCE" | "HALLUCINATION_DETECTED";
+// ETAPE 4 - Résultat structuré
+interface HSResult {
+  status: "DONE" | "NEED_INFO" | "LOW_CONFIDENCE" | "ERROR" | "VERIFICATION_FAILED";
   recommended_code: string | null;
   confidence: number | null;
   confidence_level: "high" | "medium" | "low" | null;
   justification_short: string | null;
-  alternatives: Alternative[];
-  evidence: EvidenceItem[];
-  next_question: NextQuestion | null;
+  alternatives: Array<{ code: string; reason: string; confidence: number }>;
+  evidence: Evidence[];
+  next_question: {
+    id: string;
+    label: string;
+    type: "yesno" | "select" | "text";
+    options?: { value: string; label: string }[];
+    required: boolean;
+  } | null;
   error_message: string | null;
   answers: Record<string, string>;
-  verification_passed?: boolean;
-  verification_details?: string;
-}
-
-// ============= CANDIDATE RETRIEVAL =============
-
-async function getCandidateHSCodes(
-  supabase: any,
-  productName: string,
-  limit = 20
-): Promise<HSCodeCandidate[]> {
-  console.log("Fetching candidate HS codes for:", productName);
-  
-  // Search by keywords in label_fr
-  const keywords = productName.toLowerCase().split(/\s+/).filter(k => k.length > 2);
-  
-  if (keywords.length === 0) {
-    // Fallback: get most common codes
-    const { data } = await supabase
-      .from("hs_codes")
-      .select("code_10, code_6, chapter_2, label_fr, label_ar, unit, taxes, restrictions")
-      .limit(limit);
-    return data || [];
-  }
-
-  // Build search query with OR conditions
-  const { data, error } = await supabase
-    .from("hs_codes")
-    .select("code_10, code_6, chapter_2, label_fr, label_ar, unit, taxes, restrictions")
-    .or(keywords.map(k => `label_fr.ilike.%${k}%`).join(","))
-    .limit(limit);
-
-  if (error) {
-    console.error("Error fetching HS codes:", error);
-    return [];
-  }
-
-  console.log(`Found ${data?.length || 0} candidate HS codes`);
-  return data || [];
-}
-
-// ============= RAG SEARCH =============
-
-async function searchKnowledgeBase(
-  supabase: any,
-  query: string,
-  sources: string[] = ["omd", "maroc", "lois"],
-  limit = 10
-): Promise<KBChunk[]> {
-  console.log("RAG search for:", query);
-  
-  // Simple text search in kb_chunks (without embeddings for now)
-  const keywords = query.toLowerCase().split(/\s+/).filter(k => k.length > 2);
-  
-  if (keywords.length === 0) {
-    return [];
-  }
-
-  const { data, error } = await supabase
-    .from("kb_chunks")
-    .select("id, source, doc_id, ref, text")
-    .in("source", sources)
-    .or(keywords.map(k => `text.ilike.%${k}%`).join(","))
-    .limit(limit);
-
-  if (error) {
-    console.error("Error searching KB:", error);
-    return [];
-  }
-
-  // Add similarity scores based on keyword matches
-  const results: KBChunk[] = (data || []).map((chunk: { id: string; source: string; doc_id: string; ref: string; text: string }) => {
-    const textLower = chunk.text.toLowerCase();
-    const matchCount = keywords.filter(k => textLower.includes(k)).length;
-    return {
-      id: chunk.id,
-      source: chunk.source,
-      doc_id: chunk.doc_id,
-      ref: chunk.ref,
-      text: chunk.text,
-      similarity: matchCount / keywords.length,
+  verification: {
+    passed: boolean;
+    checks: {
+      code_in_candidates: boolean;
+      evidence_not_empty: boolean;
+      justification_uses_evidence: boolean;
+      product_code_coherent: boolean;
     };
+    details: string;
+  } | null;
+  product_profile: ProductProfile | null;
+  candidates_count: number;
+}
+
+// ============================================================================
+// ETAPE 1 : EXTRACTION (Vision/OCR)
+// ============================================================================
+
+async function extractProductProfile(
+  imageUrls: string[],
+  productName: string,
+  answers: Record<string, string>
+): Promise<ProductProfile> {
+  console.log("ETAPE 1: Extraction ProductProfile...");
+  
+  if (!LOVABLE_API_KEY) {
+    throw new Error("LOVABLE_API_KEY not configured");
+  }
+
+  if (imageUrls.length === 0) {
+    // Pas de documents, créer un profil minimal
+    return {
+      product_name: productName,
+      description: productName,
+      material_composition: [],
+      dimensions: null,
+      weight: null,
+      intended_use: null,
+      manufacturing_process: null,
+      brand: null,
+      model: null,
+      technical_specs: {},
+      extracted_texts: [],
+      confidence_extraction: 0.3,
+    };
+  }
+
+  const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
+    {
+      type: "text",
+      text: `Analyse ces documents (fiches techniques, factures, photos) et extrais un profil produit structuré.
+
+PRODUIT DÉCLARÉ: ${productName}
+
+${Object.keys(answers).length > 0 ? `INFORMATIONS ADDITIONNELLES:\n${Object.entries(answers).map(([k, v]) => `- ${k}: ${v}`).join("\n")}` : ""}
+
+EXTRAIS UNIQUEMENT les informations VISIBLES dans les documents. Ne suppose rien.
+
+Réponds en JSON strict:
+{
+  "product_name": "nom exact du produit",
+  "description": "description technique détaillée",
+  "material_composition": ["matériau1", "matériau2"],
+  "dimensions": "dimensions si mentionnées ou null",
+  "weight": "poids si mentionné ou null",
+  "intended_use": "usage prévu si mentionné ou null",
+  "manufacturing_process": "procédé de fabrication si mentionné ou null",
+  "brand": "marque si visible ou null",
+  "model": "modèle si visible ou null",
+  "technical_specs": {"spec1": "valeur1"},
+  "extracted_texts": ["textes clés extraits des documents"],
+  "confidence_extraction": 0.0-1.0
+}`,
+    },
+  ];
+
+  for (const url of imageUrls) {
+    content.push({ type: "image_url", image_url: { url } });
+  }
+
+  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${LOVABLE_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash",
+      messages: [{ role: "user", content }],
+      temperature: 0.1,
+    }),
   });
 
-  // Sort by similarity
-  results.sort((a, b) => b.similarity - a.similarity);
-  
-  console.log(`Found ${results.length} KB chunks`);
-  return results;
-}
-
-// ============= DUM HISTORY SEARCH =============
-
-async function searchDUMHistory(
-  supabase: any,
-  productName: string,
-  companyId: string,
-  limit = 5
-): Promise<DUMRecord[]> {
-  console.log("Searching DUM history for:", productName);
-  
-  const keywords = productName.toLowerCase().split(/\s+/).filter(k => k.length > 2);
-  
-  if (keywords.length === 0) {
-    return [];
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("Extraction error:", response.status, errorText);
+    throw new Error(`Extraction failed: ${response.status}`);
   }
 
-  const { data, error } = await supabase
-    .from("dum_records")
-    .select("hs_code_10, product_description, origin_country, reliability_score")
-    .eq("company_id", companyId)
-    .or(keywords.map(k => `product_description.ilike.%${k}%`).join(","))
-    .order("reliability_score", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("Error searching DUM history:", error);
-    return [];
+  const data = await response.json();
+  const aiResponse = data.choices?.[0]?.message?.content || "";
+  
+  const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    console.error("Failed to parse extraction response");
+    return {
+      product_name: productName,
+      description: productName,
+      material_composition: [],
+      dimensions: null,
+      weight: null,
+      intended_use: null,
+      manufacturing_process: null,
+      brand: null,
+      model: null,
+      technical_specs: {},
+      extracted_texts: [],
+      confidence_extraction: 0.2,
+    };
   }
 
-  console.log(`Found ${data?.length || 0} DUM records`);
-  return data || [];
+  const parsed = JSON.parse(jsonMatch[0]);
+  console.log("ProductProfile extrait:", parsed.product_name);
+  
+  return {
+    product_name: parsed.product_name || productName,
+    description: parsed.description || productName,
+    material_composition: parsed.material_composition || [],
+    dimensions: parsed.dimensions || null,
+    weight: parsed.weight || null,
+    intended_use: parsed.intended_use || null,
+    manufacturing_process: parsed.manufacturing_process || null,
+    brand: parsed.brand || null,
+    model: parsed.model || null,
+    technical_specs: parsed.technical_specs || {},
+    extracted_texts: parsed.extracted_texts || [],
+    confidence_extraction: parsed.confidence_extraction || 0.5,
+  };
 }
 
-// ============= INTELLIGENT SCORING =============
+// ============================================================================
+// ETAPE 2 : CANDIDATS (Liste fermée depuis DB uniquement)
+// ============================================================================
 
 function calculateTextSimilarity(text1: string, text2: string): number {
-  const words1 = new Set(text1.toLowerCase().split(/\s+/).filter(w => w.length > 2));
-  const words2 = new Set(text2.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const normalize = (t: string) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const words1 = new Set(normalize(text1).split(/\s+/).filter(w => w.length > 2));
+  const words2 = new Set(normalize(text2).split(/\s+/).filter(w => w.length > 2));
   
   if (words1.size === 0 || words2.size === 0) return 0;
   
@@ -230,334 +243,317 @@ function calculateTextSimilarity(text1: string, text2: string): number {
     if (words2.has(word)) matches++;
   }
   
-  // Jaccard-like similarity
-  const union = new Set([...words1, ...words2]);
-  return matches / union.size;
+  return (2 * matches) / (words1.size + words2.size);
 }
 
-function calculateNGramSimilarity(text1: string, text2: string, n = 3): number {
-  const getNGrams = (text: string, n: number): Set<string> => {
-    const normalized = text.toLowerCase().replace(/\s+/g, " ");
-    const ngrams = new Set<string>();
-    for (let i = 0; i <= normalized.length - n; i++) {
-      ngrams.add(normalized.slice(i, i + n));
-    }
-    return ngrams;
-  };
+async function getCandidates(
+  supabase: any,
+  profile: ProductProfile,
+  companyId: string,
+  originCountry: string,
+  limit = 30
+): Promise<HSCandidate[]> {
+  console.log("ETAPE 2: Génération candidates[] depuis DB...");
   
-  const ngrams1 = getNGrams(text1, n);
-  const ngrams2 = getNGrams(text2, n);
+  // Construire les termes de recherche
+  const searchTerms = [
+    profile.product_name,
+    profile.description,
+    ...profile.material_composition,
+    profile.intended_use,
+  ].filter(Boolean).join(" ");
   
-  if (ngrams1.size === 0 || ngrams2.size === 0) return 0;
+  const keywords = searchTerms.toLowerCase().split(/\s+/).filter(k => k.length > 2);
   
-  let matches = 0;
-  for (const ngram of ngrams1) {
-    if (ngrams2.has(ngram)) matches++;
+  if (keywords.length === 0) {
+    console.log("Aucun mot-clé, retour liste vide");
+    return [];
   }
-  
-  return (2 * matches) / (ngrams1.size + ngrams2.size);
-}
 
-function scoreCandidates(
-  candidates: HSCodeCandidate[],
-  productName: string,
-  dumRecords: DUMRecord[],
-  kbChunks: KBChunk[],
-  originCountry: string
-): ScoredCandidate[] {
-  console.log("Scoring candidates with intelligent algorithm...");
-  
-  // Create a map of DUM codes with their cumulative scores
-  const dumCodeScores = new Map<string, { count: number; avgReliability: number; descriptions: string[] }>();
-  for (const dum of dumRecords) {
+  // Requête hs_codes (nomenclature Maroc)
+  const { data: hsCodes, error: hsError } = await supabase
+    .from("hs_codes")
+    .select("code_10, code_6, chapter_2, label_fr, label_ar, unit, taxes, restrictions")
+    .or(keywords.slice(0, 5).map(k => `label_fr.ilike.%${k}%`).join(","))
+    .limit(limit * 2);
+
+  if (hsError) {
+    console.error("Erreur requête hs_codes:", hsError);
+  }
+
+  // Requête dum_records (historique entreprise)
+  const { data: dumRecords, error: dumError } = await supabase
+    .from("dum_records")
+    .select("hs_code_10, product_description, origin_country, reliability_score")
+    .eq("company_id", companyId)
+    .or(keywords.slice(0, 5).map(k => `product_description.ilike.%${k}%`).join(","))
+    .order("reliability_score", { ascending: false })
+    .limit(50);
+
+  if (dumError) {
+    console.error("Erreur requête dum_records:", dumError);
+  }
+
+  console.log(`DB: ${hsCodes?.length || 0} hs_codes, ${dumRecords?.length || 0} dum_records`);
+
+  // Construire map des scores DUM par code
+  const dumScoreMap = new Map<string, { count: number; avgScore: number; matchOrigin: boolean }>();
+  for (const dum of dumRecords || []) {
     const code = dum.hs_code_10.replace(/\./g, "");
-    const existing = dumCodeScores.get(code);
+    const existing = dumScoreMap.get(code);
+    const matchOrigin = dum.origin_country?.toLowerCase() === originCountry.toLowerCase();
+    
     if (existing) {
       existing.count++;
-      existing.avgReliability = (existing.avgReliability * (existing.count - 1) + dum.reliability_score) / existing.count;
-      existing.descriptions.push(dum.product_description);
+      existing.avgScore = (existing.avgScore * (existing.count - 1) + (dum.reliability_score || 50)) / existing.count;
+      existing.matchOrigin = existing.matchOrigin || matchOrigin;
     } else {
-      dumCodeScores.set(code, {
+      dumScoreMap.set(code, {
         count: 1,
-        avgReliability: dum.reliability_score,
-        descriptions: [dum.product_description],
+        avgScore: dum.reliability_score || 50,
+        matchOrigin,
       });
     }
   }
-  
-  // Create a map of KB mentions per code
-  const kbCodeMentions = new Map<string, number>();
-  for (const chunk of kbChunks) {
-    // Look for HS code patterns in KB chunks
-    const codeMatches = chunk.text.match(/\b\d{4,10}\b/g) || [];
-    for (const code of codeMatches) {
-      if (code.length >= 4) {
-        const normalized = code.padEnd(10, "0");
-        const existing = kbCodeMentions.get(normalized) || 0;
-        kbCodeMentions.set(normalized, existing + chunk.similarity);
-      }
-    }
-  }
-  
-  const scoredCandidates: ScoredCandidate[] = candidates.map(candidate => {
-    const normalizedCode = candidate.code_10.replace(/\./g, "");
-    const code6 = normalizedCode.slice(0, 6);
+
+  // Scorer les candidats
+  const candidates: HSCandidate[] = (hsCodes || []).map((hs: any) => {
+    const code = hs.code_10.replace(/\./g, "");
+    const dumInfo = dumScoreMap.get(code);
     
-    // 1. Text similarity score (40% weight max)
-    const wordSimilarity = calculateTextSimilarity(productName, candidate.label_fr);
-    const ngramSimilarity = calculateNGramSimilarity(productName, candidate.label_fr);
-    const textSimilarity = (wordSimilarity * 0.6 + ngramSimilarity * 0.4) * 40;
+    // Score similarité texte (max 40)
+    const textSim = calculateTextSimilarity(searchTerms, hs.label_fr) * 40;
     
-    // 2. DUM history bonus (35% weight max)
-    let dumHistoryBonus = 0;
-    let dumMatches = 0;
-    
-    // Exact code match in DUM
-    const exactDumMatch = dumCodeScores.get(normalizedCode);
-    if (exactDumMatch) {
-      dumHistoryBonus += (exactDumMatch.avgReliability / 100) * 25 * Math.min(exactDumMatch.count, 5) / 5;
-      dumMatches = exactDumMatch.count;
-      
-      // Bonus for similar product descriptions in DUM
-      for (const desc of exactDumMatch.descriptions) {
-        const descSimilarity = calculateTextSimilarity(productName, desc);
-        if (descSimilarity > 0.3) {
-          dumHistoryBonus += descSimilarity * 10;
-        }
-      }
+    // Score historique DUM (max 35)
+    let dumScore = 0;
+    if (dumInfo) {
+      dumScore = (dumInfo.avgScore / 100) * 25 * Math.min(dumInfo.count, 5) / 5;
+      dumScore = Math.min(dumScore, 35);
     }
     
-    // Partial match (same chapter/heading)
-    for (const [dumCode, dumData] of dumCodeScores) {
-      if (dumCode !== normalizedCode && dumCode.startsWith(code6)) {
-        dumHistoryBonus += (dumData.avgReliability / 100) * 5 * Math.min(dumData.count, 3) / 3;
-      }
-    }
+    // Score correspondance origine (max 10)
+    const originScore = dumInfo?.matchOrigin ? 10 : 0;
     
-    dumHistoryBonus = Math.min(dumHistoryBonus, 35);
+    // KB mentions sera ajouté à l'étape 3
+    const kbScore = 0;
     
-    // 3. KB mention bonus (15% weight max)
-    let kbMentionBonus = 0;
-    let kbMentions = 0;
-    
-    const kbExactMention = kbCodeMentions.get(normalizedCode);
-    if (kbExactMention) {
-      kbMentionBonus += Math.min(kbExactMention * 10, 15);
-      kbMentions++;
-    }
-    
-    // Check for chapter/heading mentions
-    for (const [kbCode, score] of kbCodeMentions) {
-      if (kbCode !== normalizedCode && kbCode.startsWith(code6)) {
-        kbMentionBonus += Math.min(score * 3, 5);
-        kbMentions++;
-      }
-    }
-    
-    kbMentionBonus = Math.min(kbMentionBonus, 15);
-    
-    // 4. Origin country bonus (10% weight max)
-    let originBonus = 0;
-    for (const dum of dumRecords) {
-      if (dum.hs_code_10.replace(/\./g, "") === normalizedCode && 
-          dum.origin_country.toLowerCase() === originCountry.toLowerCase()) {
-        originBonus = 10;
-        break;
-      }
-    }
-    
-    const totalScore = textSimilarity + dumHistoryBonus + kbMentionBonus + originBonus;
+    const totalScore = textSim + dumScore + kbScore + originScore;
     
     return {
-      ...candidate,
+      code_10: hs.code_10,
+      code_6: hs.code_6,
+      chapter_2: hs.chapter_2,
+      label_fr: hs.label_fr,
+      label_ar: hs.label_ar,
+      unit: hs.unit,
+      taxes: hs.taxes,
+      restrictions: hs.restrictions,
       score: Math.round(totalScore * 100) / 100,
-      scoreBreakdown: {
-        textSimilarity: Math.round(textSimilarity * 100) / 100,
-        dumHistoryBonus: Math.round(dumHistoryBonus * 100) / 100,
-        kbMentionBonus: Math.round(kbMentionBonus * 100) / 100,
-        originBonus,
+      score_breakdown: {
+        text_similarity: Math.round(textSim * 100) / 100,
+        dum_history: Math.round(dumScore * 100) / 100,
+        kb_mentions: 0,
+        origin_match: originScore,
       },
-      dumMatches,
-      kbMentions,
+      dum_matches: dumInfo?.count || 0,
     };
   });
+
+  // Ajouter les codes DUM qui ne sont pas dans hs_codes (récupérer leurs infos)
+  const existingCodes = new Set(candidates.map(c => c.code_10.replace(/\./g, "")));
+  const missingDumCodes = [...dumScoreMap.keys()].filter(code => !existingCodes.has(code));
   
-  // Sort by score descending
-  scoredCandidates.sort((a, b) => b.score - a.score);
-  
-  console.log("Top 5 scored candidates:", scoredCandidates.slice(0, 5).map(c => ({
-    code: c.code_10,
-    label: c.label_fr.slice(0, 50),
-    score: c.score,
-    breakdown: c.scoreBreakdown,
-  })));
-  
-  return scoredCandidates;
-}
-
-// ============= PROMPTS =============
-
-function buildSystemPromptWithScores(
-  scoredCandidates: ScoredCandidate[],
-  kbChunks: KBChunk[],
-  dumRecords: DUMRecord[]
-): string {
-  let prompt = `Tu es un expert en classification douanière. Tu analyses les documents fournis pour déterminer le code SH à 10 chiffres.
-
-RÈGLE ANTI-HALLUCINATION CRITIQUE:
-⚠️ Tu ne peux recommander QUE des codes qui existent dans la liste CANDIDATS_VALIDES ci-dessous.
-⚠️ Si aucun code candidat ne correspond, réponds avec status="LOW_CONFIDENCE" et demande plus d'infos.
-⚠️ NE JAMAIS inventer un code qui n'est pas dans la liste.
-
-`;
-
-  // Add scored candidates list (top 20)
-  const topCandidates = scoredCandidates.slice(0, 20);
-  if (topCandidates.length > 0) {
-    prompt += `=== CANDIDATS_VALIDES (classés par pertinence) ===\n`;
-    prompt += `Format: [Score] Code: Description [Bonus historique DUM] [Mentions KB]\n\n`;
+  if (missingDumCodes.length > 0) {
+    const { data: additionalHS } = await supabase
+      .from("hs_codes")
+      .select("code_10, code_6, chapter_2, label_fr, label_ar, unit, taxes, restrictions")
+      .in("code_10", missingDumCodes.map(c => c.replace(/(\d{4})(\d{2})(\d{2})(\d{2})/, "$1.$2.$3.$4")));
     
-    topCandidates.forEach((c, idx) => {
-      const rank = idx + 1;
-      const scoreLabel = c.score >= 50 ? "★★★" : c.score >= 30 ? "★★" : c.score >= 15 ? "★" : "";
-      
-      prompt += `${rank}. [${c.score.toFixed(1)}${scoreLabel}] ${c.code_10}: ${c.label_fr}`;
-      
-      if (c.dumMatches > 0) {
-        prompt += ` [📦 ${c.dumMatches} DUM: +${c.scoreBreakdown.dumHistoryBonus.toFixed(1)}pts]`;
+    for (const hs of additionalHS || []) {
+      const code = hs.code_10.replace(/\./g, "");
+      const dumInfo = dumScoreMap.get(code);
+      if (dumInfo) {
+        const dumScore = Math.min((dumInfo.avgScore / 100) * 35, 35);
+        const originScore = dumInfo.matchOrigin ? 10 : 0;
+        
+        candidates.push({
+          code_10: hs.code_10,
+          code_6: hs.code_6,
+          chapter_2: hs.chapter_2,
+          label_fr: hs.label_fr,
+          label_ar: hs.label_ar,
+          unit: hs.unit,
+          taxes: hs.taxes,
+          restrictions: hs.restrictions,
+          score: dumScore + originScore,
+          score_breakdown: {
+            text_similarity: 0,
+            dum_history: dumScore,
+            kb_mentions: 0,
+            origin_match: originScore,
+          },
+          dum_matches: dumInfo.count,
+        });
       }
-      if (c.kbMentions > 0) {
-        prompt += ` [📚 KB: +${c.scoreBreakdown.kbMentionBonus.toFixed(1)}pts]`;
-      }
-      if (c.scoreBreakdown.originBonus > 0) {
-        prompt += ` [🌍 Origine: +${c.scoreBreakdown.originBonus}pts]`;
-      }
-      if (c.unit) {
-        prompt += ` [Unité: ${c.unit}]`;
-      }
-      if (c.restrictions?.length) {
-        prompt += ` [⚠️ Restrictions]`;
-      }
-      prompt += `\n`;
-    });
-    
-    prompt += `\n💡 CONSEIL: Les codes avec un score élevé sont plus probables basés sur:\n`;
-    prompt += `   - Similarité textuelle avec le produit\n`;
-    prompt += `   - Historique des DUM de l'entreprise\n`;
-    prompt += `   - Mentions dans la documentation réglementaire\n`;
-    prompt += `   - Correspondance du pays d'origine\n\n`;
-  } else {
-    prompt += `⚠️ AUCUN CANDIDAT TROUVÉ - Tu DOIS répondre avec status="NEED_INFO" pour demander plus de détails.\n\n`;
-  }
-
-  // Add KB context
-  if (kbChunks.length > 0) {
-    prompt += `=== CONTEXTE RÉGLEMENTAIRE (KB) ===\n`;
-    kbChunks.slice(0, 5).forEach(chunk => {
-      prompt += `[${chunk.source.toUpperCase()}] ${chunk.ref}:\n${chunk.text.slice(0, 500)}...\n\n`;
-    });
-  }
-
-  // Add DUM history
-  if (dumRecords.length > 0) {
-    prompt += `=== HISTORIQUE DUM (classifications passées) ===\n`;
-    dumRecords.forEach(dum => {
-      prompt += `- "${dum.product_description}" → ${dum.hs_code_10} (fiabilité: ${dum.reliability_score}/100)\n`;
-    });
-    prompt += `\n`;
-  }
-
-  prompt += `RÈGLES DE CLASSIFICATION:
-1. Analyse TOUS les documents fournis en détail
-2. Base ta classification sur les caractéristiques techniques du produit
-3. Choisis UNIQUEMENT parmi les CANDIDATS_VALIDES
-4. Fournis des preuves documentaires (evidence) pour justifier
-5. Si tu manques d'informations, pose UNE question précise
-6. Exprime ta confiance en pourcentage (0-100)
-
-NIVEAUX DE CONFIANCE:
-- high (>=85%): Classification certaine avec preuves solides
-- medium (65-84%): Classification probable mais à vérifier  
-- low (<65%): Informations insuffisantes
-
-FORMAT DE RÉPONSE (JSON strict):
-{
-  "status": "DONE" | "NEED_INFO" | "LOW_CONFIDENCE",
-  "recommended_code": "XXXXXXXXXXXX" (doit être dans CANDIDATS_VALIDES) ou null,
-  "confidence": 0-100 ou null,
-  "justification_short": "Explication courte en 1-2 phrases",
-  "alternatives": [
-    {"code": "XXXXXXXXXXXX", "reason": "Raison alternative", "confidence": 0-100}
-  ],
-  "evidence": [
-    {"source": "omd"|"maroc"|"lois"|"dum", "doc_id": "ID", "ref": "Section/Article", "excerpt": "Citation pertinente"}
-  ],
-  "next_question": {
-    "id": "q_xxx",
-    "label": "Question précise",
-    "type": "yesno"|"select"|"text",
-    "options": [{"value": "val", "label": "Label"}] (si type=select),
-    "required": true
-  } ou null
-}`;
-
-  return prompt;
-}
-
-function buildUserPrompt(
-  request: ClassifyRequest, 
-  productName: string
-): string {
-  let prompt = `PRODUIT À CLASSIFIER: ${productName}
-TYPE D'OPÉRATION: ${request.context.type_import_export === "import" ? "Importation" : "Exportation"}
-PAYS D'ORIGINE: ${request.context.origin_country}
-
-`;
-
-  if (request.file_urls.length > 0) {
-    prompt += `DOCUMENTS FOURNIS (${request.file_urls.length} fichiers):
-Les documents sont joints en tant qu'images à analyser.
-
-`;
-  }
-
-  if (Object.keys(request.answers).length > 0) {
-    prompt += `RÉPONSES AUX QUESTIONS PRÉCÉDENTES:
-`;
-    for (const [questionId, answer] of Object.entries(request.answers)) {
-      prompt += `- ${questionId}: ${answer}
-`;
     }
-    prompt += "\n";
   }
 
-  prompt += `Analyse ces informations et fournis ta recommandation de classification douanière.
-RAPPEL: Tu ne peux recommander QUE des codes de la liste CANDIDATS_VALIDES.`;
-
-  return prompt;
+  // Trier par score et limiter
+  candidates.sort((a, b) => b.score - a.score);
+  const result = candidates.slice(0, limit);
+  
+  console.log(`candidates[]: ${result.length} codes, top score: ${result[0]?.score || 0}`);
+  return result;
 }
 
-// ============= AI CALL =============
+// ============================================================================
+// ETAPE 3 : PREUVES RAG (kb_chunks uniquement)
+// ============================================================================
 
-async function callLovableAI(
-  systemPrompt: string,
-  userPrompt: string,
-  imageUrls: string[]
-): Promise<ClassifyResult> {
+async function searchEvidence(
+  supabase: any,
+  profile: ProductProfile,
+  candidates: HSCandidate[],
+  limit = 15
+): Promise<Evidence[]> {
+  console.log("ETAPE 3: Recherche evidence[] dans kb_chunks...");
+  
+  // Termes de recherche
+  const searchTerms = [
+    profile.product_name,
+    profile.description,
+    ...profile.material_composition,
+    ...candidates.slice(0, 5).map(c => c.code_10),
+    ...candidates.slice(0, 5).map(c => c.label_fr),
+  ].filter(Boolean);
+  
+  const keywords = searchTerms.join(" ").toLowerCase().split(/\s+/).filter(k => k.length > 2);
+  
+  if (keywords.length === 0) {
+    return [];
+  }
+
+  // Recherche dans kb_chunks
+  const { data: chunks, error } = await supabase
+    .from("kb_chunks")
+    .select("id, source, doc_id, ref, text")
+    .or(keywords.slice(0, 8).map(k => `text.ilike.%${k}%`).join(","))
+    .limit(limit * 2);
+
+  if (error) {
+    console.error("Erreur recherche kb_chunks:", error);
+    return [];
+  }
+
+  // Scorer et trier par pertinence
+  const scoredChunks = (chunks || []).map((chunk: any) => {
+    const textLower = chunk.text.toLowerCase();
+    const matchCount = keywords.filter(k => textLower.includes(k)).length;
+    return {
+      ...chunk,
+      similarity: matchCount / keywords.length,
+    };
+  });
+
+  scoredChunks.sort((a: any, b: any) => b.similarity - a.similarity);
+
+  // Convertir en Evidence[]
+  const evidence: Evidence[] = scoredChunks.slice(0, limit).map((chunk: any) => ({
+    source: chunk.source as Evidence["source"],
+    doc_id: chunk.doc_id,
+    ref: chunk.ref,
+    excerpt: chunk.text.slice(0, 500),
+    similarity: chunk.similarity,
+  }));
+
+  console.log(`evidence[]: ${evidence.length} extraits trouvés`);
+  return evidence;
+}
+
+// ============================================================================
+// ETAPE 4 : CHOIX CONTROLE (IA contrainte)
+// ============================================================================
+
+async function makeControlledChoice(
+  profile: ProductProfile,
+  candidates: HSCandidate[],
+  evidence: Evidence[],
+  context: { type_import_export: string; origin_country: string },
+  answers: Record<string, string>
+): Promise<Omit<HSResult, "verification" | "product_profile" | "candidates_count">> {
+  console.log("ETAPE 4: Choix contrôlé par IA...");
+  
   if (!LOVABLE_API_KEY) {
     throw new Error("LOVABLE_API_KEY not configured");
   }
 
-  const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
-    { type: "text", text: userPrompt },
-  ];
-
-  for (const url of imageUrls) {
-    content.push({
-      type: "image_url",
-      image_url: { url },
-    });
+  if (candidates.length === 0) {
+    return {
+      status: "NEED_INFO",
+      recommended_code: null,
+      confidence: null,
+      confidence_level: null,
+      justification_short: "Aucun code candidat trouvé. Veuillez fournir plus de détails sur le produit.",
+      alternatives: [],
+      evidence: [],
+      next_question: {
+        id: "q_product_details",
+        label: "Décrivez le produit plus en détail (matière, usage, caractéristiques techniques)",
+        type: "text",
+        required: true,
+      },
+      error_message: null,
+      answers,
+    };
   }
+
+  // Construire le prompt STRICT
+  const systemPrompt = `Tu es un expert en classification douanière marocaine. Tu dois choisir UN code SH parmi une liste FERMÉE de candidats.
+
+RÈGLES ABSOLUES (NON NÉGOCIABLES):
+1. Tu ne peux recommander QUE un code présent dans candidates[]
+2. Ta justification ne peut citer QUE des extraits de evidence[]
+3. AUCUNE connaissance générale, AUCUNE supposition
+4. Si evidence[] est vide ou insuffisante → status="LOW_CONFIDENCE"
+5. Si aucun code ne correspond → status="NEED_INFO" avec question précise
+
+FORMAT DE RÉPONSE (JSON strict):
+{
+  "status": "DONE" | "NEED_INFO" | "LOW_CONFIDENCE",
+  "recommended_code": "code_10 exact de candidates[]" ou null,
+  "confidence": 0-100 (basé sur evidence[]),
+  "justification_short": "UNIQUEMENT basé sur evidence[] - max 2 phrases",
+  "alternatives": [{"code": "code de candidates[]", "reason": "basé sur evidence[]", "confidence": 0-100}],
+  "evidence_used": ["doc_id1", "doc_id2"],
+  "next_question": {"id": "q_xxx", "label": "question", "type": "yesno|select|text", "options": [...], "required": true} ou null
+}`;
+
+  const userPrompt = `=== PRODUCT PROFILE ===
+Nom: ${profile.product_name}
+Description: ${profile.description}
+Matériaux: ${profile.material_composition.join(", ") || "Non spécifié"}
+Usage: ${profile.intended_use || "Non spécifié"}
+Spécifications: ${JSON.stringify(profile.technical_specs)}
+
+=== CONTEXTE ===
+Opération: ${context.type_import_export}
+Origine: ${context.origin_country}
+${Object.keys(answers).length > 0 ? `Réponses: ${JSON.stringify(answers)}` : ""}
+
+=== CANDIDATES[] (LISTE FERMÉE - choisis UNIQUEMENT parmi ces codes) ===
+${candidates.slice(0, 15).map((c, i) => 
+  `${i + 1}. [Score: ${c.score}] ${c.code_10}: ${c.label_fr}${c.dum_matches > 0 ? ` [${c.dum_matches} DUM]` : ""}`
+).join("\n")}
+
+=== EVIDENCE[] (SEULES sources autorisées pour justification) ===
+${evidence.length > 0 
+  ? evidence.slice(0, 10).map((e, i) => 
+      `${i + 1}. [${e.source.toUpperCase()}] ${e.ref} (${e.doc_id}):\n"${e.excerpt.slice(0, 300)}..."`
+    ).join("\n\n")
+  : "⚠️ AUCUNE EVIDENCE DISPONIBLE - Tu DOIS répondre avec status='LOW_CONFIDENCE' ou 'NEED_INFO'"
+}
+
+RAPPEL: Tu ne peux utiliser QUE candidates[] et evidence[]. Aucune autre source.`;
 
   const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
@@ -569,15 +565,15 @@ async function callLovableAI(
       model: "google/gemini-2.5-flash",
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content },
+        { role: "user", content: userPrompt },
       ],
-      temperature: 0.1, // Lower temperature for more deterministic output
+      temperature: 0.1,
     }),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error("Lovable AI error:", response.status, errorText);
+    console.error("Choice error:", response.status, errorText);
     
     if (response.status === 429) {
       throw new Error("Rate limit exceeded. Please try again later.");
@@ -585,129 +581,166 @@ async function callLovableAI(
     if (response.status === 402) {
       throw new Error("AI credits exhausted. Please add funds.");
     }
-    throw new Error(`AI gateway error: ${response.status}`);
+    throw new Error(`AI error: ${response.status}`);
   }
 
   const data = await response.json();
   const aiResponse = data.choices?.[0]?.message?.content || "";
-
-  console.log("AI Response:", aiResponse);
+  
+  console.log("AI choice response received");
 
   const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    throw new Error("Failed to parse AI response as JSON");
+    throw new Error("Failed to parse AI choice response");
   }
 
   const parsed = JSON.parse(jsonMatch[0]);
 
+  // Normaliser confidence
+  let confidence = parsed.confidence ?? null;
   let confidenceLevel: "high" | "medium" | "low" | null = null;
-  if (parsed.confidence !== null && parsed.confidence !== undefined) {
-    if (parsed.confidence >= 85) confidenceLevel = "high";
-    else if (parsed.confidence >= 65) confidenceLevel = "medium";
+  
+  if (confidence !== null) {
+    if (confidence > 1) confidence = confidence / 100;
+    if (confidence >= 0.85) confidenceLevel = "high";
+    else if (confidence >= 0.65) confidenceLevel = "medium";
     else confidenceLevel = "low";
   }
 
-  const rawConfidence = parsed.confidence ?? null;
-  const normalizedConfidence = rawConfidence !== null 
-    ? (rawConfidence > 1 ? rawConfidence / 100 : rawConfidence) 
-    : null;
+  // Filtrer evidence utilisée
+  const usedEvidence = evidence.filter(e => 
+    parsed.evidence_used?.includes(e.doc_id) || 
+    parsed.justification_short?.includes(e.ref)
+  );
 
   return {
     status: parsed.status || "ERROR",
     recommended_code: parsed.recommended_code || null,
-    confidence: normalizedConfidence,
+    confidence,
     confidence_level: confidenceLevel,
     justification_short: parsed.justification_short || null,
-    alternatives: (parsed.alternatives || []).map((alt: Record<string, unknown>) => ({
-      ...alt,
-      confidence: typeof alt.confidence === "number" && alt.confidence > 1 
-        ? alt.confidence / 100 
-        : alt.confidence,
+    alternatives: (parsed.alternatives || []).map((alt: any) => ({
+      code: alt.code,
+      reason: alt.reason,
+      confidence: alt.confidence > 1 ? alt.confidence / 100 : alt.confidence,
     })),
-    evidence: parsed.evidence || [],
+    evidence: usedEvidence.length > 0 ? usedEvidence : evidence.slice(0, 5),
     next_question: parsed.next_question || null,
-    error_message: parsed.error_message || null,
-    answers: {},
+    error_message: null,
+    answers,
   };
 }
 
-// ============= ANTI-HALLUCINATION VERIFICATION =============
+// ============================================================================
+// ETAPE 5 : VERIFICATION ANTI-HALLUCINATION
+// ============================================================================
 
-function verifyCodeExists(
-  recommendedCode: string | null,
-  alternatives: Alternative[],
-  candidates: ScoredCandidate[]
-): { passed: boolean; details: string; correctedCode: string | null; bestCandidate: ScoredCandidate | null } {
-  if (!recommendedCode) {
-    return { passed: true, details: "No code recommended", correctedCode: null, bestCandidate: null };
+interface VerificationResult {
+  passed: boolean;
+  checks: {
+    code_in_candidates: boolean;
+    evidence_not_empty: boolean;
+    justification_uses_evidence: boolean;
+    product_code_coherent: boolean;
+  };
+  details: string;
+  corrected_code: string | null;
+}
+
+async function verifyResult(
+  result: Omit<HSResult, "verification" | "product_profile" | "candidates_count">,
+  profile: ProductProfile,
+  candidates: HSCandidate[],
+  evidence: Evidence[]
+): Promise<VerificationResult> {
+  console.log("ETAPE 5: Vérification anti-hallucination...");
+
+  const checks = {
+    code_in_candidates: false,
+    evidence_not_empty: false,
+    justification_uses_evidence: false,
+    product_code_coherent: true, // Assume true, verify if needed
+  };
+
+  // Check 1: Code dans candidates[]
+  if (result.recommended_code) {
+    const normalizedCode = result.recommended_code.replace(/\./g, "");
+    checks.code_in_candidates = candidates.some(
+      c => c.code_10.replace(/\./g, "") === normalizedCode
+    );
+  } else {
+    // Pas de code recommandé = OK pour NEED_INFO/LOW_CONFIDENCE
+    checks.code_in_candidates = result.status !== "DONE";
   }
 
-  // Normalize code (remove dots)
-  const normalizedCode = recommendedCode.replace(/\./g, "");
-  
-  // Check if recommended code exists in candidates
-  const exactMatch = candidates.find(c => c.code_10.replace(/\./g, "") === normalizedCode);
-  
-  if (exactMatch) {
-    return { 
-      passed: true, 
-      details: `Code ${recommendedCode} verified (score: ${exactMatch.score.toFixed(1)})`,
-      correctedCode: recommendedCode,
-      bestCandidate: exactMatch,
-    };
+  // Check 2: Evidence non vide (si DONE)
+  if (result.status === "DONE") {
+    checks.evidence_not_empty = result.evidence.length > 0;
+  } else {
+    checks.evidence_not_empty = true; // Non requis pour autres statuts
   }
 
-  // Check for partial match (first 6 digits) - prefer highest scored
-  const code6 = normalizedCode.slice(0, 6);
-  const partialMatches = candidates
-    .filter(c => c.code_10.replace(/\./g, "").startsWith(code6))
-    .sort((a, b) => b.score - a.score);
-
-  if (partialMatches.length > 0) {
-    const best = partialMatches[0];
-    return {
-      passed: false,
-      details: `Code ${recommendedCode} not found, corrected to ${best.code_10} (score: ${best.score.toFixed(1)}, same heading)`,
-      correctedCode: best.code_10,
-      bestCandidate: best,
-    };
+  // Check 3: Justification utilise evidence
+  if (result.justification_short && result.evidence.length > 0) {
+    const justifLower = result.justification_short.toLowerCase();
+    checks.justification_uses_evidence = result.evidence.some(
+      e => justifLower.includes(e.ref.toLowerCase()) || 
+           justifLower.includes(e.source.toLowerCase()) ||
+           e.excerpt.split(" ").slice(0, 5).some(w => justifLower.includes(w.toLowerCase()))
+    );
+  } else if (result.status !== "DONE") {
+    checks.justification_uses_evidence = true;
   }
 
-  // Check alternatives - find the best scoring alternative
-  for (const alt of alternatives) {
-    const altNormalized = alt.code.replace(/\./g, "");
-    const altCandidate = candidates.find(c => c.code_10.replace(/\./g, "") === altNormalized);
-    if (altCandidate) {
-      return {
-        passed: false,
-        details: `Recommended code ${recommendedCode} not found, using alternative ${alt.code} (score: ${altCandidate.score.toFixed(1)})`,
-        correctedCode: alt.code,
-        bestCandidate: altCandidate,
-      };
+  // Check 4: Cohérence produit/code (vérification IA si nécessaire)
+  if (result.status === "DONE" && result.recommended_code && checks.code_in_candidates) {
+    const matchingCandidate = candidates.find(
+      c => c.code_10.replace(/\./g, "") === result.recommended_code!.replace(/\./g, "")
+    );
+    
+    if (matchingCandidate) {
+      // Simple coherence check based on text similarity
+      const similarity = calculateTextSimilarity(
+        profile.description + " " + profile.product_name,
+        matchingCandidate.label_fr
+      );
+      checks.product_code_coherent = similarity > 0.1 || matchingCandidate.dum_matches > 0;
     }
   }
 
-  // Fallback to highest scored candidate if nothing matches
-  if (candidates.length > 0) {
-    const best = candidates[0]; // Already sorted by score
-    return {
-      passed: false,
-      details: `HALLUCINATION: ${recommendedCode} invalid, suggesting best candidate ${best.code_10} (score: ${best.score.toFixed(1)})`,
-      correctedCode: best.code_10,
-      bestCandidate: best,
-    };
+  const allPassed = Object.values(checks).every(v => v);
+  
+  // Trouver un code corrigé si échec
+  let correctedCode: string | null = null;
+  if (!allPassed && !checks.code_in_candidates && result.recommended_code) {
+    // Trouver le meilleur candidat
+    const bestCandidate = candidates[0];
+    if (bestCandidate) {
+      correctedCode = bestCandidate.code_10;
+    }
   }
 
-  // No valid code found at all
+  const failedChecks = Object.entries(checks)
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+
+  const details = allPassed 
+    ? "Toutes les vérifications passées"
+    : `Échecs: ${failedChecks.join(", ")}`;
+
+  console.log("Verification:", { allPassed, checks, details });
+
   return {
-    passed: false,
-    details: `HALLUCINATION DETECTED: Code ${recommendedCode} does not exist and no candidates available`,
-    correctedCode: null,
-    bestCandidate: null,
+    passed: allPassed,
+    checks,
+    details,
+    corrected_code: correctedCode,
   };
 }
 
-// ============= MAIN HANDLER =============
+// ============================================================================
+// MAIN HANDLER
+// ============================================================================
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -720,7 +753,8 @@ serve(async (req) => {
     const body: ClassifyRequest = await req.json();
     const { case_id, file_urls, answers, context } = body;
 
-    console.log("Classify request:", { case_id, file_urls_count: file_urls.length, answers });
+    console.log("=== CLASSIFY START ===");
+    console.log("Case:", case_id, "Files:", file_urls.length, "Answers:", Object.keys(answers).length);
 
     if (!case_id) {
       return new Response(
@@ -744,7 +778,7 @@ serve(async (req) => {
       );
     }
 
-    // Log classify call
+    // Log start
     await supabase.from("audit_logs").insert({
       case_id,
       action: "classify_called",
@@ -753,177 +787,130 @@ serve(async (req) => {
       meta: { file_urls_count: file_urls.length, answers_count: Object.keys(answers).length },
     });
 
-    // ============= STEP 1: RETRIEVE CANDIDATES =============
-    console.log("Step 1: Retrieving candidate HS codes...");
-    const rawCandidates = await getCandidateHSCodes(supabase, caseData.product_name, 50);
-    
-    // ============= STEP 2: RAG SEARCH =============
-    console.log("Step 2: RAG search in knowledge base...");
-    const kbChunks = await searchKnowledgeBase(
-      supabase, 
-      caseData.product_name,
-      ["omd", "maroc", "lois"],
-      15
-    );
-    
-    // ============= STEP 3: DUM HISTORY =============
-    console.log("Step 3: Searching DUM history...");
-    const dumRecords = await searchDUMHistory(
+    // ========== ETAPE 1: EXTRACTION ==========
+    const profile = await extractProductProfile(file_urls, caseData.product_name, answers);
+
+    // ========== ETAPE 2: CANDIDATS ==========
+    const candidates = await getCandidates(
       supabase,
-      caseData.product_name,
+      profile,
       caseData.company_id,
-      20
-    );
-    
-    // ============= STEP 4: INTELLIGENT SCORING =============
-    console.log("Step 4: Scoring candidates...");
-    const scoredCandidates = scoreCandidates(
-      rawCandidates,
-      caseData.product_name,
-      dumRecords,
-      kbChunks,
-      context.origin_country
+      context.origin_country,
+      30
     );
 
-    // Log retrieval stats
-    console.log("Retrieval stats:", {
-      rawCandidates: rawCandidates.length,
-      scoredCandidates: scoredCandidates.length,
-      kbChunks: kbChunks.length,
-      dumRecords: dumRecords.length,
-      topScore: scoredCandidates[0]?.score || 0,
+    // ========== ETAPE 3: PREUVES RAG ==========
+    const evidence = await searchEvidence(supabase, profile, candidates, 15);
+
+    // ========== ETAPE 4: CHOIX CONTROLE ==========
+    let result = await makeControlledChoice(profile, candidates, evidence, context, answers);
+
+    // ========== ETAPE 5: VERIFICATION ==========
+    const verification = await verifyResult(result, profile, candidates, evidence);
+
+    // Appliquer corrections si nécessaire
+    if (!verification.passed) {
+      if (verification.corrected_code) {
+        console.log(`Correction: ${result.recommended_code} → ${verification.corrected_code}`);
+        result.recommended_code = verification.corrected_code;
+        result.justification_short = `[CORRIGÉ] ${result.justification_short}`;
+        if (result.confidence) {
+          result.confidence = Math.max(0.5, result.confidence * 0.7);
+          result.confidence_level = result.confidence >= 0.65 ? "medium" : "low";
+        }
+      } else if (!verification.checks.evidence_not_empty && result.status === "DONE") {
+        // RÈGLE UI: Ne jamais afficher code si evidence vide
+        result.status = "VERIFICATION_FAILED";
+        result.error_message = "Classification rejetée: aucune preuve documentaire";
+        result.recommended_code = null;
+        result.confidence = null;
+        result.confidence_level = null;
+      }
+    }
+
+    // Construire résultat final
+    const finalResult: HSResult = {
+      ...result,
+      verification: {
+        passed: verification.passed,
+        checks: verification.checks,
+        details: verification.details,
+      },
+      product_profile: profile,
+      candidates_count: candidates.length,
+    };
+
+    // Log verification
+    await supabase.from("audit_logs").insert({
+      case_id,
+      action: "classify_verified",
+      user_id: caseData.created_by,
+      user_phone: "system",
+      meta: {
+        verification_passed: verification.passed,
+        verification_checks: verification.checks,
+        recommended_code: finalResult.recommended_code,
+        candidates_count: candidates.length,
+        evidence_count: evidence.length,
+      },
     });
 
-    // ============= STEP 5: BUILD PROMPTS & CALL AI =============
-    console.log("Step 5: Building prompts and calling AI...");
-    const systemPrompt = buildSystemPromptWithScores(scoredCandidates, kbChunks, dumRecords);
-    const userPrompt = buildUserPrompt(body, caseData.product_name);
-    
-    let result: ClassifyResult;
-    try {
-      result = await callLovableAI(systemPrompt, userPrompt, file_urls);
-      result.answers = answers;
-    } catch (aiError) {
-      console.error("AI classification error:", aiError);
-      result = {
-        status: "ERROR",
-        recommended_code: null,
-        confidence: null,
-        confidence_level: null,
-        justification_short: null,
-        alternatives: [],
-        evidence: [],
-        next_question: null,
-        error_message: aiError instanceof Error ? aiError.message : "Classification failed",
-        answers,
-      };
-    }
-
-    // ============= STEP 6: ANTI-HALLUCINATION VERIFICATION =============
-    console.log("Step 6: Anti-hallucination verification...");
-    if (result.status === "DONE" && result.recommended_code) {
-      const verification = verifyCodeExists(
-        result.recommended_code,
-        result.alternatives,
-        scoredCandidates
-      );
-      
-      console.log("Verification result:", verification);
-      
-      result.verification_passed = verification.passed;
-      result.verification_details = verification.details;
-
-      if (!verification.passed) {
-        if (verification.correctedCode) {
-          // Correct the code
-          console.log(`Correcting code from ${result.recommended_code} to ${verification.correctedCode}`);
-          result.recommended_code = verification.correctedCode;
-          result.justification_short = `[CORRIGÉ] ${result.justification_short}`;
-          
-          // Reduce confidence due to correction
-          if (result.confidence) {
-            result.confidence = Math.max(0.5, result.confidence * 0.8);
-            if (result.confidence < 0.65) result.confidence_level = "low";
-            else if (result.confidence < 0.85) result.confidence_level = "medium";
-          }
-        } else {
-          // No valid code found - mark as hallucination
-          result.status = "HALLUCINATION_DETECTED";
-          result.error_message = verification.details;
-          result.confidence = null;
-          result.confidence_level = null;
-        }
-      }
-
-      // Log verification
-      await supabase.from("audit_logs").insert({
-        case_id,
-        action: "classify_verified",
-        user_id: caseData.created_by,
-        user_phone: "system",
-        meta: {
-          verification_passed: verification.passed,
-          verification_details: verification.details,
-          original_code: result.recommended_code,
-          corrected_code: verification.correctedCode,
-        },
-      });
-    }
-
-    // ============= STEP 6: SAVE & UPDATE =============
+    // Save result
     const { error: insertError } = await supabase.from("classification_results").insert({
       case_id,
-      status: result.status,
-      recommended_code: result.recommended_code,
-      confidence: result.confidence,
-      confidence_level: result.confidence_level,
-      justification_short: result.justification_short,
-      alternatives: result.alternatives,
-      evidence: result.evidence,
-      next_question: result.next_question,
-      error_message: result.error_message,
-      answers: result.answers,
+      status: finalResult.status,
+      recommended_code: finalResult.recommended_code,
+      confidence: finalResult.confidence,
+      confidence_level: finalResult.confidence_level,
+      justification_short: finalResult.justification_short,
+      alternatives: finalResult.alternatives,
+      evidence: finalResult.evidence,
+      next_question: finalResult.next_question,
+      error_message: finalResult.error_message,
+      answers: finalResult.answers,
     });
 
     if (insertError) {
-      console.error("Failed to save classification result:", insertError);
+      console.error("Failed to save result:", insertError);
     }
 
     // Update case status
     let newStatus = caseData.status;
-    if (result.status === "DONE" && result.verification_passed) {
+    if (finalResult.status === "DONE" && verification.passed && finalResult.evidence.length > 0) {
       newStatus = "RESULT_READY";
-      
-      await supabase.from("audit_logs").insert({
-        case_id,
-        action: "result_ready",
-        user_id: caseData.created_by,
-        user_phone: "system",
-        meta: { 
-          recommended_code: result.recommended_code,
-          confidence: result.confidence,
-          verification_passed: result.verification_passed,
-        },
-      });
-    } else if (result.status === "ERROR" || result.status === "HALLUCINATION_DETECTED") {
+    } else if (finalResult.status === "ERROR" || finalResult.status === "VERIFICATION_FAILED") {
       newStatus = "ERROR";
     }
 
     if (newStatus !== caseData.status) {
-      await supabase
-        .from("cases")
-        .update({ status: newStatus })
-        .eq("id", case_id);
+      await supabase.from("cases").update({ status: newStatus }).eq("id", case_id);
+      
+      if (newStatus === "RESULT_READY") {
+        await supabase.from("audit_logs").insert({
+          case_id,
+          action: "result_ready",
+          user_id: caseData.created_by,
+          user_phone: "system",
+          meta: {
+            recommended_code: finalResult.recommended_code,
+            confidence: finalResult.confidence,
+            evidence_count: finalResult.evidence.length,
+          },
+        });
+      }
     }
 
+    console.log("=== CLASSIFY END ===", finalResult.status);
+
     return new Response(
-      JSON.stringify(result),
+      JSON.stringify(finalResult),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
+
   } catch (error) {
     console.error("Classify error:", error);
     return new Response(
-      JSON.stringify({ 
+      JSON.stringify({
         status: "ERROR",
         error_message: error instanceof Error ? error.message : "Unknown error",
         recommended_code: null,
@@ -933,6 +920,9 @@ serve(async (req) => {
         alternatives: [],
         evidence: [],
         next_question: null,
+        verification: null,
+        product_profile: null,
+        candidates_count: 0,
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

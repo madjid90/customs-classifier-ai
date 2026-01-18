@@ -7,8 +7,9 @@ const corsHeaders = {
 };
 
 interface RequestBody {
-  mode: "stats" | "hs_sample" | "kb_sample";
+  mode: "stats" | "hs_sample" | "kb_sample" | "dum_sample";
   count?: number;
+  company_id?: string;
 }
 
 interface HSCodeGenerated {
@@ -27,6 +28,16 @@ interface KBChunkGenerated {
   text: string;
   hs_codes?: string[];
   keywords?: string[];
+}
+
+interface DUMRecordGenerated {
+  hs_code_10: string;
+  product_description: string;
+  origin_country: string;
+  quantity: number;
+  unit: string;
+  value_mad: number;
+  date: string;
 }
 
 async function callOpenAI(prompt: string, apiKey: string): Promise<string> {
@@ -343,9 +354,212 @@ Assure-toi que les références sont réalistes (ex: "Note 85.17", "Article 3 LF
       );
     }
 
+    // ========================================
+    // MODE: dum_sample
+    // ========================================
+    if (mode === "dum_sample") {
+      const openaiKey = Deno.env.get("OPENAI_API_KEY");
+      if (!openaiKey) {
+        return new Response(
+          JSON.stringify({ error: "OPENAI_API_KEY is not configured. Please add it in Supabase secrets." }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Validate count parameter
+      const recordCount = Math.min(Math.max(count || 100, 10), 500);
+      console.log(`[dum_sample] Generating ${recordCount} DUM records`);
+
+      // Get existing HS codes to use
+      const { data: hsCodes, error: hsError } = await supabase
+        .from("hs_codes")
+        .select("code_10, label_fr")
+        .eq("active", true)
+        .limit(50);
+
+      if (hsError) {
+        console.error("[dum_sample] Error fetching HS codes:", hsError);
+        throw new Error(`Failed to fetch HS codes: ${hsError.message}`);
+      }
+
+      if (!hsCodes || hsCodes.length < 10) {
+        return new Response(
+          JSON.stringify({ 
+            error: "Minimum 10 codes HS requis dans la base de données pour générer des DUM synthétiques",
+            available: hsCodes?.length || 0
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      console.log(`[dum_sample] Using ${hsCodes.length} existing HS codes`);
+
+      // Determine company_id - use provided one or get from user profile
+      let targetCompanyId = body.company_id;
+      
+      if (!targetCompanyId) {
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("company_id")
+          .eq("user_id", user.id)
+          .single();
+
+        if (profileError || !profile?.company_id) {
+          return new Response(
+            JSON.stringify({ error: "Impossible de déterminer l'entreprise de l'utilisateur" }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        targetCompanyId = profile.company_id;
+      }
+
+      console.log(`[dum_sample] Target company: ${targetCompanyId}`);
+
+      // Build HS codes list for prompt
+      const hsCodesList = hsCodes
+        .map(c => `${c.code_10}: ${c.label_fr}`)
+        .join("\n");
+
+      const prompt = `Tu es un expert en commerce international marocain.
+Génère ${recordCount} enregistrements DUM (Déclaration Unique de Marchandise) RÉALISTES.
+
+Utilise UNIQUEMENT ces codes HS existants :
+${hsCodesList}
+
+Pour chaque DUM, génère :
+- Un code HS de la liste ci-dessus (OBLIGATOIRE)
+- Une description produit réaliste et détaillée (100-300 caractères)
+- Un pays d'origine (codes ISO 2 lettres : CN, FR, ES, DE, IT, US, TR, IN, etc.)
+- Une quantité réaliste (1-10000)
+- Une unité (u, kg, l, m, m2, paire)
+- Une valeur en MAD (100-1000000)
+- Une date dans les 2 dernières années (format YYYY-MM-DD)
+
+Les descriptions doivent être variées et réalistes (marques, modèles, spécifications techniques).
+
+FORMAT JSON STRICT :
+{
+  "records": [
+    {
+      "hs_code_10": "8517130000",
+      "product_description": "Smartphones Samsung Galaxy A54 5G 128GB noir",
+      "origin_country": "CN",
+      "quantity": 500,
+      "unit": "u",
+      "value_mad": 1500000,
+      "date": "2024-06-15"
+    }
+  ]
+}`;
+
+      const content = await callOpenAI(prompt, openaiKey);
+      let parsed: any;
+      let records: DUMRecordGenerated[] = [];
+      
+      try {
+        parsed = parseJSONResponse(content);
+        records = parsed.records || parsed;
+      } catch (parseError) {
+        console.error("[dum_sample] JSON parse error:", parseError);
+        return new Response(
+          JSON.stringify({ 
+            error: "Échec du parsing de la réponse OpenAI",
+            details: parseError instanceof Error ? parseError.message : String(parseError)
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      console.log(`[dum_sample] Generated ${records.length} records from OpenAI`);
+
+      // Create a set of valid HS codes for validation
+      const validHsCodes = new Set(hsCodes.map(c => c.code_10));
+
+      let inserted = 0;
+      let skipped = 0;
+      const errors: string[] = [];
+
+      // Insert in batches with rate limiting
+      const batchSize = 20;
+      for (let i = 0; i < records.length; i += batchSize) {
+        const batch = records.slice(i, i + batchSize);
+        const validRecords = [];
+
+        for (const record of batch) {
+          // Validate HS code exists
+          if (!record.hs_code_10 || !validHsCodes.has(record.hs_code_10)) {
+            console.log(`[dum_sample] Skipping invalid HS code: ${record.hs_code_10}`);
+            skipped++;
+            continue;
+          }
+
+          // Validate other required fields
+          if (!record.product_description || record.product_description.length < 10) {
+            skipped++;
+            continue;
+          }
+
+          if (!record.origin_country || record.origin_country.length !== 2) {
+            skipped++;
+            continue;
+          }
+
+          // Prepare DUM record for insertion
+          const dumRecord = {
+            company_id: targetCompanyId,
+            hs_code_10: record.hs_code_10,
+            product_description: record.product_description.substring(0, 2000),
+            origin_country: record.origin_country.toUpperCase(),
+            destination_country: "MA",
+            quantity: Math.max(1, Math.min(record.quantity || 1, 999999)),
+            unit: record.unit || "u",
+            value_mad: Math.max(100, Math.min(record.value_mad || 1000, 99999999)),
+            dum_date: record.date || new Date().toISOString().split("T")[0],
+            validated: false,
+            reliability_score: 60, // Synthetic data = reduced reliability
+            source: "synthetic"
+          };
+
+          validRecords.push(dumRecord);
+        }
+
+        if (validRecords.length > 0) {
+          const { error: insertError } = await supabase
+            .from("dum_records")
+            .insert(validRecords);
+
+          if (insertError) {
+            console.error(`[dum_sample] Batch insert error:`, insertError);
+            errors.push(`Batch ${i / batchSize + 1}: ${insertError.message}`);
+          } else {
+            inserted += validRecords.length;
+          }
+        }
+
+        // Rate limiting: 200ms between batches
+        if (i + batchSize < records.length) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      }
+
+      console.log(`[dum_sample] Complete: ${inserted} inserted, ${skipped} skipped`);
+
+      return new Response(
+        JSON.stringify({ 
+          success: true, 
+          generated: records.length,
+          inserted,
+          skipped,
+          message: `${inserted} DUM synthétiques générées`,
+          errors: errors.length > 0 ? errors : undefined
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // Invalid mode
     return new Response(
-      JSON.stringify({ error: `Invalid mode: ${mode}. Use "stats", "hs_sample", or "kb_sample"` }),
+      JSON.stringify({ error: `Invalid mode: ${mode}. Use "stats", "hs_sample", "kb_sample", or "dum_sample"` }),
       { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 

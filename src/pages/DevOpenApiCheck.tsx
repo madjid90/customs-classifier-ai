@@ -3,7 +3,9 @@ import { runOpenApiContractChecks, CheckResult } from "../dev/openapiCheck";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, CheckCircle2, XCircle, AlertTriangle, SkipForward } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { RefreshCw, CheckCircle2, XCircle, AlertTriangle, SkipForward, Shield, ShieldAlert } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -13,11 +15,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { configureValidator, getValidatorConfig } from "@/lib/openapi-validator";
+import { Separator } from "@/components/ui/separator";
 
 export default function DevOpenApiCheck() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<CheckResult[]>([]);
   const [error, setError] = useState<string | null>(null);
+  
+  // Validator config state
+  const [strictMode, setStrictMode] = useState(() => getValidatorConfig().strict);
+  const [validatorEnabled, setValidatorEnabled] = useState(() => getValidatorConfig().enabled);
+  const [logLevel, setLogLevel] = useState(() => getValidatorConfig().logLevel);
 
   const runChecks = async () => {
     setLoading(true);
@@ -35,6 +44,22 @@ export default function DevOpenApiCheck() {
   useEffect(() => {
     runChecks();
   }, []);
+
+  // Toggle handlers
+  const handleStrictModeToggle = (checked: boolean) => {
+    setStrictMode(checked);
+    configureValidator({ strict: checked });
+  };
+
+  const handleValidatorToggle = (checked: boolean) => {
+    setValidatorEnabled(checked);
+    configureValidator({ enabled: checked });
+  };
+
+  const handleLogLevelChange = (level: "none" | "warn" | "error" | "verbose") => {
+    setLogLevel(level);
+    configureValidator({ logLevel: level });
+  };
 
   // Only available in dev mode
   if (!import.meta.env.DEV) {
@@ -58,7 +83,104 @@ export default function DevOpenApiCheck() {
   const skipCount = rows.filter((r) => r.skipped).length;
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-6xl">
+    <div className="container mx-auto py-8 px-4 max-w-6xl space-y-6">
+      {/* Validator Configuration Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Shield className="h-5 w-5" />
+            Configuration du Validateur
+          </CardTitle>
+          <CardDescription>
+            Contrôlez le comportement du middleware de validation OpenAPI en temps réel
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-6 md:grid-cols-3">
+            {/* Validator Enabled Toggle */}
+            <div className="flex items-center justify-between space-x-4 rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <Label htmlFor="validator-enabled" className="font-medium">
+                  Validateur Actif
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Active/désactive la validation des réponses
+                </p>
+              </div>
+              <Switch
+                id="validator-enabled"
+                checked={validatorEnabled}
+                onCheckedChange={handleValidatorToggle}
+              />
+            </div>
+
+            {/* Strict Mode Toggle */}
+            <div className="flex items-center justify-between space-x-4 rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <Label htmlFor="strict-mode" className="font-medium flex items-center gap-1">
+                  Mode Strict
+                  {strictMode && <ShieldAlert className="h-3 w-3 text-red-500" />}
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Bloque les réponses non conformes
+                </p>
+              </div>
+              <Switch
+                id="strict-mode"
+                checked={strictMode}
+                onCheckedChange={handleStrictModeToggle}
+                disabled={!validatorEnabled}
+              />
+            </div>
+
+            {/* Log Level */}
+            <div className="space-y-2 rounded-lg border p-4">
+              <Label className="font-medium">Niveau de Log</Label>
+              <div className="flex flex-wrap gap-2">
+                {(["none", "warn", "error", "verbose"] as const).map((level) => (
+                  <Button
+                    key={level}
+                    size="sm"
+                    variant={logLevel === level ? "default" : "outline"}
+                    onClick={() => handleLogLevelChange(level)}
+                    disabled={!validatorEnabled}
+                    className="text-xs"
+                  >
+                    {level}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Status Indicator */}
+          <Separator className="my-4" />
+          <div className="flex items-center gap-4 text-sm">
+            <span className="text-muted-foreground">État actuel:</span>
+            {validatorEnabled ? (
+              <Badge variant={strictMode ? "destructive" : "default"} className="gap-1">
+                {strictMode ? (
+                  <>
+                    <ShieldAlert className="h-3 w-3" />
+                    STRICT - Blocage actif
+                  </>
+                ) : (
+                  <>
+                    <Shield className="h-3 w-3" />
+                    WARN - Alertes uniquement
+                  </>
+                )}
+              </Badge>
+            ) : (
+              <Badge variant="secondary">DÉSACTIVÉ</Badge>
+            )}
+            <span className="text-muted-foreground">|</span>
+            <span className="text-muted-foreground">Logs: <code className="bg-muted px-1 rounded">{logLevel}</code></span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Contract Check Results Card */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
@@ -221,6 +343,7 @@ export default function DevOpenApiCheck() {
               <li>• Les endpoints d'authentification sont skippés (envoi SMS réel).</li>
               <li>• Le contrat YAML est situé dans <code className="bg-background px-1 rounded">/public/openapi.yaml</code></li>
               <li>• Toute violation sur /classify est un <strong>BLOCANT RELEASE</strong>.</li>
+              <li>• En <strong>mode strict</strong>, les réponses non conformes lèvent une erreur bloquante.</li>
             </ul>
           </div>
         </CardContent>

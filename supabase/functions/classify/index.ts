@@ -13,6 +13,12 @@ import {
   ClassifyRequestSchema,
   validateInput,
 } from "../_shared/validation.ts";
+import {
+  checkRateLimit,
+  rateLimitResponse,
+  addRateLimitHeaders,
+  RATE_LIMIT_PRESETS,
+} from "../_shared/rate-limit.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -66,99 +72,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, operation: string): Pro
         reject(err);
       });
   });
-}
-
-// ============================================================================
-// RATE LIMITING
-// ============================================================================
-
-const RATE_LIMIT_WINDOW_MINUTES = 60; // Fenêtre de 1 heure
-const RATE_LIMIT_MAX_REQUESTS = 50; // Max 50 classifications par heure (user normal)
-const RATE_LIMIT_MAX_REQUESTS_ADMIN = 200; // Max 200 pour admins
-
-interface RateLimitResult {
-  allowed: boolean;
-  remaining: number;
-  resetAt: Date;
-  limit: number;
-}
-
-async function checkRateLimit(
-  supabase: any, 
-  userId: string, 
-  isAdmin: boolean
-): Promise<RateLimitResult> {
-  const maxRequests = isAdmin ? RATE_LIMIT_MAX_REQUESTS_ADMIN : RATE_LIMIT_MAX_REQUESTS;
-  
-  // Calculer le début de la fenêtre (début de l'heure courante)
-  const windowStart = new Date();
-  windowStart.setMinutes(0, 0, 0);
-  
-  const resetAt = new Date(windowStart);
-  resetAt.setHours(resetAt.getHours() + 1);
-  
-  try {
-    // Chercher l'entrée existante pour cette fenêtre
-    const { data, error } = await supabase
-      .from("rate_limits")
-      .select("id, request_count")
-      .eq("user_id", userId)
-      .eq("endpoint", "classify")
-      .gte("window_start", windowStart.toISOString())
-      .order("window_start", { ascending: false })
-      .limit(1)
-      .single();
-    
-    const currentCount = data?.request_count || 0;
-    
-    // Vérifier si limite atteinte
-    if (currentCount >= maxRequests) {
-      console.log(`[RATE_LIMIT] User ${userId} dépassé: ${currentCount}/${maxRequests}`);
-      return {
-        allowed: false,
-        remaining: 0,
-        resetAt,
-        limit: maxRequests,
-      };
-    }
-    
-    // Incrémenter le compteur
-    if (data?.id) {
-      await supabase
-        .from("rate_limits")
-        .update({ request_count: currentCount + 1 })
-        .eq("id", data.id);
-    } else {
-      await supabase
-        .from("rate_limits")
-        .insert({
-          user_id: userId,
-          endpoint: "classify",
-          window_start: windowStart.toISOString(),
-          request_count: 1,
-        });
-    }
-    
-    const remaining = maxRequests - currentCount - 1;
-    console.log(`[RATE_LIMIT] User ${userId}: ${currentCount + 1}/${maxRequests} (remaining: ${remaining})`);
-    
-    return {
-      allowed: true,
-      remaining,
-      resetAt,
-      limit: maxRequests,
-    };
-    
-  } catch (e) {
-    // En cas d'erreur, on laisse passer (fail-open pour ne pas bloquer)
-    console.error("[RATE_LIMIT] Erreur:", e);
-    return {
-      allowed: true,
-      remaining: maxRequests,
-      resetAt,
-      limit: maxRequests,
-    };
-  }
 }
 
 // ============================================================================
@@ -1046,34 +959,26 @@ serve(async (req) => {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // RATE LIMITING CHECK
+    // RATE LIMITING CHECK (using centralized module)
     // ═══════════════════════════════════════════════════════════
     
     // Vérifier si l'utilisateur est admin (limite plus élevée)
     const userRole = await getUserRole(user.id);
     const isAdmin = checkIsAdmin(userRole);
     
-    const rateLimit = await checkRateLimit(supabase, user.id, isAdmin);
+    // Use centralized rate limit with classify preset
+    const rateLimit = await checkRateLimit(
+      supabase, 
+      user.id, 
+      {
+        endpoint: "classify",
+        ...RATE_LIMIT_PRESETS.classify,
+      },
+      isAdmin
+    );
     
     if (!rateLimit.allowed) {
-      return new Response(
-        JSON.stringify({
-          error: "Rate limit exceeded",
-          message: `Limite de ${rateLimit.limit} classifications par heure atteinte. Réessayez après ${rateLimit.resetAt.toISOString()}`,
-          reset_at: rateLimit.resetAt.toISOString(),
-          remaining: 0,
-        }),
-        {
-          status: 429,
-          headers: {
-            ...corsHeaders,
-            "Content-Type": "application/json",
-            "X-RateLimit-Limit": rateLimit.limit.toString(),
-            "X-RateLimit-Remaining": "0",
-            "X-RateLimit-Reset": rateLimit.resetAt.toISOString(),
-          },
-        }
-      );
+      return rateLimitResponse(rateLimit, corsHeaders);
     }
 
     // Stocker les infos rate limit pour les ajouter aux réponses

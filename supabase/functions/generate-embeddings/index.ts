@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
@@ -47,14 +48,16 @@ function getConfig() {
 }
 
 // ============================================================================
-// TYPES
+// INPUT VALIDATION (Zod)
 // ============================================================================
 
-interface EmbeddingRequest {
-  mode: "batch" | "stats";
-  target?: "hs" | "kb";
-  batch_size?: number;
-}
+const EmbeddingRequestSchema = z.object({
+  mode: z.enum(["stats", "batch"]),
+  target: z.enum(["hs", "kb"]).optional(),
+  batch_size: z.number().int().min(1).max(200).default(50),
+});
+
+type EmbeddingRequest = z.infer<typeof EmbeddingRequestSchema>;
 
 interface StatsResponse {
   hs_codes: {
@@ -204,8 +207,32 @@ Deno.serve(async (req) => {
       );
     }
 
-    const body: EmbeddingRequest = await req.json();
-    const { mode = "stats", target, batch_size = 50 } = body;
+    // Parse and validate request body
+    let rawBody: unknown;
+    try {
+      rawBody = await req.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ error: "Corps de requête JSON invalide" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    const validation = EmbeddingRequestSchema.safeParse(rawBody);
+    if (!validation.success) {
+      return new Response(
+        JSON.stringify({
+          error: "Validation error",
+          details: validation.error.issues.map(i => ({
+            field: i.path.join("."),
+            message: i.message,
+          })),
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    const { mode, target, batch_size } = validation.data;
 
     console.log(`[embeddings] Mode: ${mode}, target: ${target}, batch_size: ${batch_size}`);
 

@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
@@ -27,12 +28,21 @@ function getCorsHeaders(req: Request): Record<string, string> {
   };
 }
 
-interface AttachFileRequest {
-  file_type: string;
-  file_url: string;
-  filename: string;
-  size_bytes: number;
-}
+// ============================================================================
+// INPUT VALIDATION (Zod)
+// ============================================================================
+
+const AttachFileSchema = z.object({
+  file_type: z.enum([
+    "tech_sheet", "invoice", "packing_list", "certificate",
+    "dum", "photo_product", "photo_label", "photo_plate", "other", "admin_ingestion"
+  ], { errorMap: () => ({ message: "Type de fichier invalide" }) }),
+  file_url: z.string().url("L'URL du fichier doit être valide"),
+  filename: z.string().min(1, "Le nom du fichier est requis").max(255, "Le nom du fichier ne peut pas dépasser 255 caractères"),
+  size_bytes: z.number().int().min(0).max(50_000_000, "La taille du fichier ne peut pas dépasser 50MB"),
+});
+
+type AttachFileRequest = z.infer<typeof AttachFileSchema>;
 
 Deno.serve(async (req) => {
   // Handle CORS preflight
@@ -126,36 +136,32 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Parse request body
-    const body: AttachFileRequest = await req.json();
-    const { file_type, file_url, filename, size_bytes } = body;
-
-    // Validate required fields
-    if (!file_type || !file_url || !filename || size_bytes === undefined) {
+    // Parse and validate request body
+    let rawBody: unknown;
+    try {
+      rawBody = await req.json();
+    } catch {
       return new Response(
-        JSON.stringify({ error: "file_type, file_url, filename, and size_bytes are required" }),
+        JSON.stringify({ error: "Corps de requête JSON invalide" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    // Validate file type
-    const allowedFileTypes = ["facture", "fiche_technique", "certificat", "photo", "autre"];
-    if (!allowedFileTypes.includes(file_type)) {
+    
+    const validation = AttachFileSchema.safeParse(rawBody);
+    if (!validation.success) {
       return new Response(
-        JSON.stringify({ error: `Invalid file_type. Allowed: ${allowedFileTypes.join(", ")}` }),
+        JSON.stringify({
+          error: "Validation error",
+          details: validation.error.issues.map(i => ({
+            field: i.path.join("."),
+            message: i.message,
+          })),
+        }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    // Validate size (max 20MB)
-    const maxSize = 20 * 1024 * 1024;
-    if (size_bytes > maxSize) {
-      return new Response(
-        JSON.stringify({ error: "File size exceeds 20MB limit" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
+    
+    const { file_type, file_url, filename, size_bytes } = validation.data;
     // Insert file record
     const { data: fileRecord, error: insertError } = await supabase
       .from("case_files")

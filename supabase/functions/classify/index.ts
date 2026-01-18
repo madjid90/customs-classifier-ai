@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
@@ -176,12 +177,38 @@ async function checkRateLimit(
 }
 
 // ============================================================================
-// TYPES STRICTS
+// INPUT VALIDATION (Zod)
 // ============================================================================
 
-interface ClassifyRequest {
-  case_id: string;
+const ClassifyRequestSchema = z.object({
+  case_id: z.string().uuid("case_id doit être un UUID valide"),
+});
+
+type ClassifyRequest = z.infer<typeof ClassifyRequestSchema>;
+
+function validateInput(body: unknown): { success: true; data: ClassifyRequest } | { success: false; error: Response } {
+  const result = ClassifyRequestSchema.safeParse(body);
+  if (!result.success) {
+    return {
+      success: false,
+      error: new Response(
+        JSON.stringify({
+          error: "Validation error",
+          details: result.error.issues.map(i => ({
+            field: i.path.join("."),
+            message: i.message,
+          })),
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      ),
+    };
+  }
+  return { success: true, data: result.data };
 }
+
+// ============================================================================
+// TYPES STRICTS
+// ============================================================================
 
 // ETAPE 1 - ProductProfile STRICT
 interface ProductProfile {
@@ -1017,22 +1044,29 @@ serve(async (req) => {
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    // Parse request
-    const body: ClassifyRequest = await req.json();
-    const { case_id } = body;
+    // Parse and validate request
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ error: "Corps de requête JSON invalide" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    const validation = validateInput(body);
+    if (!validation.success) {
+      return validation.error;
+    }
+    
+    const { case_id } = validation.data;
 
     console.log("╔═══════════════════════════════════════════════════════╗");
     console.log("║    PIPELINE CLASSIFICATION ANTI-HALLUCINATION v4      ║");
     console.log("║    (avec gestion timeout - limite 25s)                ║");
     console.log("╚═══════════════════════════════════════════════════════╝");
     console.log("Case:", case_id);
-
-    if (!case_id) {
-      return new Response(
-        JSON.stringify({ error: "case_id requis" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
     // Vérifier authentification
     const authHeader = req.headers.get("Authorization");

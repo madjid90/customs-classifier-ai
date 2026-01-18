@@ -6,9 +6,25 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+// ============================================================================
+// CONFIGURATION OPENAI - 100% BACKEND, ZERO FRONTEND AI
+// ============================================================================
+
+function getOpenAIConfig() {
+  const apiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY non configurée");
+  }
+  return {
+    apiKey,
+    modelVision: Deno.env.get("OPENAI_MODEL_VISION") || "gpt-4.1",
+    modelReasoning: Deno.env.get("OPENAI_MODEL_REASONING") || "gpt-4.1",
+    modelVerifier: Deno.env.get("OPENAI_MODEL_VERIFIER") || "gpt-4.1-mini",
+  };
+}
 
 // ============================================================================
 // TYPES
@@ -102,7 +118,54 @@ interface HSResult {
 }
 
 // ============================================================================
-// ETAPE 1 : EXTRACTION (Vision/OCR)
+// OPENAI API CALLS - Backend Only (Zero Frontend AI)
+// ============================================================================
+
+async function callOpenAI(
+  messages: Array<{ role: string; content: any }>,
+  model: string,
+  temperature = 0.1
+): Promise<string> {
+  const config = getOpenAIConfig();
+  
+  console.log(`[classify] Calling OpenAI ${model}...`);
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature,
+      max_tokens: 4096,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("[classify] OpenAI error:", response.status, errorText);
+    
+    if (response.status === 429) {
+      throw new Error("Rate limit OpenAI dépassé. Réessayez plus tard.");
+    }
+    if (response.status === 401) {
+      throw new Error("Clé API OpenAI invalide.");
+    }
+    if (response.status === 402 || response.status === 403) {
+      throw new Error("Quota OpenAI épuisé.");
+    }
+    throw new Error(`Erreur OpenAI: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+
+// ============================================================================
+// ETAPE 1 : EXTRACTION (Vision/OCR) - Uses OPENAI_MODEL_VISION
 // ============================================================================
 
 async function extractProductProfile(
@@ -110,11 +173,9 @@ async function extractProductProfile(
   productName: string,
   answers: Record<string, string>
 ): Promise<ProductProfile> {
-  console.log("ETAPE 1: Extraction ProductProfile...");
+  console.log("ETAPE 1: Extraction ProductProfile avec OpenAI Vision...");
   
-  if (!LOVABLE_API_KEY) {
-    throw new Error("LOVABLE_API_KEY not configured");
-  }
+  const config = getOpenAIConfig();
 
   if (imageUrls.length === 0) {
     // Pas de documents, créer un profil minimal
@@ -167,27 +228,11 @@ Réponds en JSON strict:
     content.push({ type: "image_url", image_url: { url } });
   }
 
-  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${LOVABLE_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
-      messages: [{ role: "user", content }],
-      temperature: 0.1,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error("Extraction error:", response.status, errorText);
-    throw new Error(`Extraction failed: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const aiResponse = data.choices?.[0]?.message?.content || "";
+  const aiResponse = await callOpenAI(
+    [{ role: "user", content }],
+    config.modelVision,
+    0.1
+  );
   
   const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
@@ -471,7 +516,7 @@ async function searchEvidence(
 }
 
 // ============================================================================
-// ETAPE 4 : CHOIX CONTROLE (IA contrainte)
+// ETAPE 4 : CHOIX CONTROLE (IA contrainte) - Uses OPENAI_MODEL_REASONING
 // ============================================================================
 
 async function makeControlledChoice(
@@ -481,11 +526,9 @@ async function makeControlledChoice(
   context: { type_import_export: string; origin_country: string },
   answers: Record<string, string>
 ): Promise<Omit<HSResult, "verification" | "product_profile" | "candidates_count">> {
-  console.log("ETAPE 4: Choix contrôlé par IA...");
+  console.log("ETAPE 4: Choix contrôlé par OpenAI...");
   
-  if (!LOVABLE_API_KEY) {
-    throw new Error("LOVABLE_API_KEY not configured");
-  }
+  const config = getOpenAIConfig();
 
   if (candidates.length === 0) {
     return {
@@ -507,7 +550,7 @@ async function makeControlledChoice(
     };
   }
 
-  // Construire le prompt STRICT
+  // Construire le prompt STRICT - ZERO HALLUCINATION
   const systemPrompt = `Tu es un expert en classification douanière marocaine. Tu dois choisir UN code SH parmi une liste FERMÉE de candidats.
 
 RÈGLES ABSOLUES (NON NÉGOCIABLES):
@@ -555,38 +598,15 @@ ${evidence.length > 0
 
 RAPPEL: Tu ne peux utiliser QUE candidates[] et evidence[]. Aucune autre source.`;
 
-  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${LOVABLE_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.1,
-    }),
-  });
+  const aiResponse = await callOpenAI(
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    config.modelReasoning,
+    0.1
+  );
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error("Choice error:", response.status, errorText);
-    
-    if (response.status === 429) {
-      throw new Error("Rate limit exceeded. Please try again later.");
-    }
-    if (response.status === 402) {
-      throw new Error("AI credits exhausted. Please add funds.");
-    }
-    throw new Error(`AI error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const aiResponse = data.choices?.[0]?.message?.content || "";
-  
   console.log("AI choice response received");
 
   const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
@@ -632,7 +652,7 @@ RAPPEL: Tu ne peux utiliser QUE candidates[] et evidence[]. Aucune autre source.
 }
 
 // ============================================================================
-// ETAPE 5 : VERIFICATION ANTI-HALLUCINATION
+// ETAPE 5 : VERIFICATION ANTI-HALLUCINATION - Uses OPENAI_MODEL_VERIFIER
 // ============================================================================
 
 interface VerificationResult {
@@ -753,7 +773,7 @@ serve(async (req) => {
     const body: ClassifyRequest = await req.json();
     const { case_id, file_urls, answers, context } = body;
 
-    console.log("=== CLASSIFY START ===");
+    console.log("=== CLASSIFY START (OpenAI Backend) ===");
     console.log("Case:", case_id, "Files:", file_urls.length, "Answers:", Object.keys(answers).length);
 
     if (!case_id) {
@@ -784,13 +804,13 @@ serve(async (req) => {
       action: "classify_called",
       user_id: caseData.created_by,
       user_phone: "system",
-      meta: { file_urls_count: file_urls.length, answers_count: Object.keys(answers).length },
+      meta: { file_urls_count: file_urls.length, answers_count: Object.keys(answers).length, ai_backend: "openai" },
     });
 
-    // ========== ETAPE 1: EXTRACTION ==========
+    // ========== ETAPE 1: EXTRACTION (OpenAI Vision) ==========
     const profile = await extractProductProfile(file_urls, caseData.product_name, answers);
 
-    // ========== ETAPE 2: CANDIDATS ==========
+    // ========== ETAPE 2: CANDIDATS (Database only) ==========
     const candidates = await getCandidates(
       supabase,
       profile,
@@ -799,13 +819,13 @@ serve(async (req) => {
       30
     );
 
-    // ========== ETAPE 3: PREUVES RAG ==========
+    // ========== ETAPE 3: PREUVES RAG (kb_chunks) ==========
     const evidence = await searchEvidence(supabase, profile, candidates, 15);
 
-    // ========== ETAPE 4: CHOIX CONTROLE ==========
+    // ========== ETAPE 4: CHOIX CONTROLE (OpenAI Reasoning) ==========
     let result = await makeControlledChoice(profile, candidates, evidence, context, answers);
 
-    // ========== ETAPE 5: VERIFICATION ==========
+    // ========== ETAPE 5: VERIFICATION (Anti-hallucination) ==========
     const verification = await verifyResult(result, profile, candidates, evidence);
 
     // Appliquer corrections si nécessaire
@@ -852,6 +872,7 @@ serve(async (req) => {
         recommended_code: finalResult.recommended_code,
         candidates_count: candidates.length,
         evidence_count: evidence.length,
+        ai_backend: "openai",
       },
     });
 
@@ -895,12 +916,13 @@ serve(async (req) => {
             recommended_code: finalResult.recommended_code,
             confidence: finalResult.confidence,
             evidence_count: finalResult.evidence.length,
+            ai_backend: "openai",
           },
         });
       }
     }
 
-    console.log("=== CLASSIFY END ===", finalResult.status);
+    console.log("=== CLASSIFY END (OpenAI Backend) ===", finalResult.status);
 
     return new Response(
       JSON.stringify(finalResult),

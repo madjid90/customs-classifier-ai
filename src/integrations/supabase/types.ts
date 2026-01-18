@@ -222,6 +222,7 @@ export type Database = {
           attachments: Json | null
           company_id: string
           created_at: string
+          destination_country: string | null
           dum_date: string
           dum_number: string | null
           hs_code_10: string
@@ -230,7 +231,9 @@ export type Database = {
           product_description: string
           quantity: number | null
           reliability_score: number | null
+          source: string | null
           unit: string | null
+          updated_at: string | null
           validated: boolean | null
           validated_at: string | null
           validated_by: string | null
@@ -240,6 +243,7 @@ export type Database = {
           attachments?: Json | null
           company_id: string
           created_at?: string
+          destination_country?: string | null
           dum_date: string
           dum_number?: string | null
           hs_code_10: string
@@ -248,7 +252,9 @@ export type Database = {
           product_description: string
           quantity?: number | null
           reliability_score?: number | null
+          source?: string | null
           unit?: string | null
+          updated_at?: string | null
           validated?: boolean | null
           validated_at?: string | null
           validated_by?: string | null
@@ -258,6 +264,7 @@ export type Database = {
           attachments?: Json | null
           company_id?: string
           created_at?: string
+          destination_country?: string | null
           dum_date?: string
           dum_number?: string | null
           hs_code_10?: string
@@ -266,7 +273,9 @@ export type Database = {
           product_description?: string
           quantity?: number | null
           reliability_score?: number | null
+          source?: string | null
           unit?: string | null
+          updated_at?: string | null
           validated?: boolean | null
           validated_at?: string | null
           validated_by?: string | null

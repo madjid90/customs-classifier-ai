@@ -1,5 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { 
+  createBackgroundTask, 
+  updateTaskProgress, 
+  completeTask, 
+  failTask 
+} from "../_shared/background-tasks.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -384,14 +390,27 @@ serve(async (req) => {
       }
     }
     
+    // Create background task for tracking
+    const taskId = await createBackgroundTask(supabase, "sync_hs_laws", {
+      itemsTotal: docGroups.size,
+      createdBy: user.id,
+    });
+    
     // Analyser chaque document
     const allUpdates: HSUpdate[] = [];
     const allErrors: string[] = [];
+    let docsProcessed = 0;
     
     for (const [docKey, doc] of docGroups) {
       try {
         const updates = await extractHSUpdatesFromLaw(doc.text, doc.ref);
         allUpdates.push(...updates);
+        docsProcessed++;
+        
+        // Update progress
+        if (taskId && docsProcessed % 2 === 0) {
+          await updateTaskProgress(supabase, taskId, docsProcessed, docGroups.size);
+        }
       } catch (e) {
         allErrors.push(`${docKey}: ${e instanceof Error ? e.message : "Unknown error"}`);
       }
@@ -424,6 +443,15 @@ serve(async (req) => {
       updates: deduplicatedUpdates.slice(0, 50),
     };
     
+    // Complete task
+    if (taskId) {
+      if (allErrors.length > 0 && docsProcessed === 0) {
+        await failTask(supabase, taskId, allErrors.join("; ").substring(0, 500), 0);
+      } else {
+        await completeTask(supabase, taskId, appliedCount, deduplicatedUpdates.length);
+      }
+    }
+    
     // Logger l'historique
     if (!dry_run) {
       await logSyncHistory(supabase, result, version_label);
@@ -432,7 +460,7 @@ serve(async (req) => {
     console.log(`[sync-hs] Sync complete: ${result.updates_applied}/${result.updates_found} applied`);
     
     return new Response(
-      JSON.stringify(result),
+      JSON.stringify({ ...result, task_id: taskId }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
     

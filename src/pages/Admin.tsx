@@ -50,6 +50,7 @@ import {
   Scale
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useBackgroundTaskNotifications } from "@/hooks/useBackgroundTaskNotifications";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 
@@ -57,6 +58,9 @@ const SOURCES: IngestionSource[] = ["omd", "maroc", "lois", "dum"];
 
 export default function AdminPage() {
   const { toast } = useToast();
+  
+  // Enable real-time background task notifications
+  useBackgroundTaskNotifications();
   
   const [ingestions, setIngestions] = useState<IngestionFile[]>([]);
   const [isLoadingIngestions, setIsLoadingIngestions] = useState(true);

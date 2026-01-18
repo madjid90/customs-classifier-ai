@@ -2,6 +2,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { logger } from "../_shared/logger.ts";
 import { corsHeaders } from "../_shared/cors.ts";
+import { 
+  createBackgroundTask, 
+  updateTaskProgress, 
+  completeTask, 
+  failTask 
+} from "../_shared/background-tasks.ts";
 
 const RATE_LIMIT_DELAY_MS = 200;
 
@@ -231,6 +237,12 @@ Deno.serve(async (req) => {
 
     console.log(`[enrich] Processing ${codes.length} HS codes...`);
 
+    // Create background task for tracking
+    const taskId = await createBackgroundTask(supabase, "enrichment_hs", {
+      itemsTotal: codes.length,
+      createdBy: user.id,
+    });
+
     let processed = 0;
     const errors: string[] = [];
 
@@ -259,6 +271,11 @@ Deno.serve(async (req) => {
         } else {
           processed++;
           console.log(`[enrich] ✓ Enriched ${code.code_10}`);
+          
+          // Update progress every 3 items
+          if (taskId && processed % 3 === 0) {
+            await updateTaskProgress(supabase, taskId, processed, codes.length);
+          }
         }
 
         // Rate limiting
@@ -276,6 +293,15 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Complete task
+    if (taskId) {
+      if (errors.length > 0 && processed === 0) {
+        await failTask(supabase, taskId, errors.join("; ").substring(0, 500), 0);
+      } else {
+        await completeTask(supabase, taskId, processed, codes.length);
+      }
+    }
+
     // Compter les codes restants
     const { count: remaining } = await supabase
       .from("hs_codes")
@@ -288,6 +314,7 @@ Deno.serve(async (req) => {
         success: true,
         processed,
         remaining: remaining || 0,
+        task_id: taskId,
         errors: errors.length > 0 ? errors : undefined
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }

@@ -404,6 +404,15 @@ export default function HistoryPage() {
                       </div>
                     ))}
                   </div>
+                  
+                  {/* Pagination skeleton */}
+                  <div className="mt-6 flex items-center justify-between">
+                    <Skeleton className="h-4 w-48" />
+                    <div className="flex gap-2">
+                      <Skeleton className="h-9 w-28" />
+                      <Skeleton className="h-9 w-24" />
+                    </div>
+                  </div>
                 </>
               ) : cases.length === 0 ? (
                 <div className="py-8 text-center text-muted-foreground">

@@ -1,0 +1,1041 @@
+openapi: 3.0.3
+info:
+  title: Classification Douanière API
+  description: API de classification douanière avec IA pour les codes HS
+  version: 1.0.0
+  contact:
+    name: Support API
+servers:
+  - url: /functions/v1
+    description: Supabase Edge Functions
+
+paths:
+  /send-otp:
+    post:
+      operationId: sendOtp
+      summary: Envoyer un code OTP par SMS
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendOtpRequest'
+      responses:
+        '200':
+          description: OTP envoyé avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendOtpResponse'
+        '400':
+          description: Requête invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Trop de requêtes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /verify-otp:
+    post:
+      operationId: verifyOtp
+      summary: Vérifier le code OTP et obtenir un token JWT
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyOtpRequest'
+      responses:
+        '200':
+          description: Authentification réussie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyOtpResponse'
+        '400':
+          description: Code OTP invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Code expiré ou invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /cases:
+    post:
+      operationId: createCase
+      summary: Créer un nouveau dossier de classification
+      tags:
+        - Cases
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCaseRequest'
+      responses:
+        '200':
+          description: Dossier créé avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseCreatedResponse'
+        '400':
+          description: Données invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      operationId: listCases
+      summary: Lister les dossiers de classification
+      tags:
+        - Cases
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/CaseStatus'
+        - name: q
+          in: query
+          description: Recherche par nom de produit
+          schema:
+            type: string
+        - name: created_by
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Liste des dossiers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseListResponse'
+        '401':
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /cases/{case_id}:
+    get:
+      operationId: getCaseDetail
+      summary: Obtenir les détails d'un dossier
+      tags:
+        - Cases
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: case_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Détails du dossier
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseDetailResponse'
+        '401':
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Dossier non trouvé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /files-presign:
+    post:
+      operationId: presignFile
+      summary: Générer une URL de téléversement présignée
+      tags:
+        - Files
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresignRequest'
+      responses:
+        '200':
+          description: URL générée avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresignResponse'
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /files-attach/{case_id}:
+    post:
+      operationId: attachFile
+      summary: Attacher un fichier à un dossier
+      tags:
+        - Files
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: case_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachFileRequest'
+      responses:
+        '200':
+          description: Fichier attaché avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachFileResponse'
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /classify:
+    post:
+      operationId: classify
+      summary: Lancer la classification IA d'un produit
+      description: |
+        Endpoint CRITIQUE de classification des produits.
+        Utilise un processus en 5 étapes pour garantir une classification fiable sans hallucination.
+      tags:
+        - Classification
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassifyRequest'
+      responses:
+        '200':
+          description: Résultat de classification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HSResult'
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erreur de classification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /export-pdf:
+    post:
+      operationId: exportPdf
+      summary: Exporter un dossier en PDF
+      tags:
+        - Export
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportPdfRequest'
+      responses:
+        '200':
+          description: PDF généré avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportPdfResponse'
+        '401':
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Dossier non trouvé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    # ============= Authentication =============
+    SendOtpRequest:
+      type: object
+      required:
+        - phone
+      properties:
+        phone:
+          type: string
+          pattern: '^\+[1-9]\d{6,14}$'
+          description: Numéro de téléphone au format E.164
+          example: "+212612345678"
+
+    SendOtpResponse:
+      type: object
+      required:
+        - success
+        - message
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    VerifyOtpRequest:
+      type: object
+      required:
+        - phone
+        - otp
+      properties:
+        phone:
+          type: string
+          pattern: '^\+[1-9]\d{6,14}$'
+        otp:
+          type: string
+          pattern: '^\d{6}$'
+          description: Code OTP à 6 chiffres
+
+    VerifyOtpResponse:
+      type: object
+      required:
+        - token
+        - user_id
+      properties:
+        token:
+          type: string
+          description: JWT token
+        user_id:
+          type: string
+          format: uuid
+        profile:
+          $ref: '#/components/schemas/UserProfile'
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        phone:
+          type: string
+        company_id:
+          type: string
+          format: uuid
+        company_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/UserRole'
+
+    # ============= Cases =============
+    CreateCaseRequest:
+      type: object
+      required:
+        - type_import_export
+        - origin_country
+        - product_name
+      properties:
+        type_import_export:
+          $ref: '#/components/schemas/ImportExportType'
+        origin_country:
+          type: string
+          minLength: 2
+          maxLength: 3
+          description: Code pays ISO 3166-1 alpha-2 ou alpha-3
+        product_name:
+          type: string
+          minLength: 1
+          maxLength: 500
+
+    CaseCreatedResponse:
+      type: object
+      required:
+        - id
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/CaseStatus'
+        created_at:
+          type: string
+          format: date-time
+        product_name:
+          type: string
+        origin_country:
+          type: string
+        type_import_export:
+          $ref: '#/components/schemas/ImportExportType'
+
+    CaseListResponse:
+      type: object
+      required:
+        - cases
+        - total
+      properties:
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/CaseSummary'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    CaseSummary:
+      type: object
+      required:
+        - id
+        - product_name
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        product_name:
+          type: string
+        origin_country:
+          type: string
+        type_import_export:
+          $ref: '#/components/schemas/ImportExportType'
+        status:
+          $ref: '#/components/schemas/CaseStatus'
+        created_at:
+          type: string
+          format: date-time
+        validated_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_result:
+          $ref: '#/components/schemas/ClassificationResultSummary'
+
+    CaseDetailResponse:
+      type: object
+      required:
+        - id
+        - product_name
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        product_name:
+          type: string
+        origin_country:
+          type: string
+        type_import_export:
+          $ref: '#/components/schemas/ImportExportType'
+        status:
+          $ref: '#/components/schemas/CaseStatus'
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+          format: uuid
+        validated_at:
+          type: string
+          format: date-time
+          nullable: true
+        validated_by:
+          type: string
+          format: uuid
+          nullable: true
+        company_id:
+          type: string
+          format: uuid
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/CaseFile'
+        last_result:
+          $ref: '#/components/schemas/ClassificationResult'
+        audit_logs:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+
+    CaseFile:
+      type: object
+      required:
+        - id
+        - filename
+        - file_type
+        - file_url
+        - size_bytes
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        file_type:
+          $ref: '#/components/schemas/CaseFileType'
+        file_url:
+          type: string
+          format: uri
+        size_bytes:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    # ============= Files =============
+    PresignRequest:
+      type: object
+      required:
+        - file_type
+        - filename
+        - content_type
+      properties:
+        case_id:
+          type: string
+          format: uuid
+          nullable: true
+        file_type:
+          $ref: '#/components/schemas/CaseFileType'
+        filename:
+          type: string
+          minLength: 1
+          maxLength: 255
+        content_type:
+          type: string
+          enum:
+            - application/pdf
+            - image/jpeg
+            - image/png
+            - image/webp
+            - image/gif
+            - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+            - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+    PresignResponse:
+      type: object
+      required:
+        - upload_url
+        - file_url
+        - path
+      properties:
+        upload_url:
+          type: string
+          format: uri
+          description: URL présignée pour le téléversement PUT
+        file_url:
+          type: string
+          format: uri
+          description: URL finale du fichier après téléversement
+        path:
+          type: string
+          description: Chemin du fichier dans le storage
+
+    AttachFileRequest:
+      type: object
+      required:
+        - file_type
+        - file_url
+        - filename
+        - size_bytes
+      properties:
+        file_type:
+          $ref: '#/components/schemas/CaseFileType'
+        file_url:
+          type: string
+          format: uri
+        filename:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
+
+    AttachFileResponse:
+      type: object
+      required:
+        - id
+        - case_id
+        - file_url
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        case_id:
+          type: string
+          format: uuid
+        file_url:
+          type: string
+          format: uri
+        file_type:
+          $ref: '#/components/schemas/CaseFileType'
+        filename:
+          type: string
+        size_bytes:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    # ============= Classification (CRITIQUE) =============
+    ClassifyRequest:
+      type: object
+      required:
+        - case_id
+        - file_urls
+        - answers
+        - context
+      properties:
+        case_id:
+          type: string
+          format: uuid
+        file_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+          minItems: 0
+        answers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Réponses aux questions précédentes (clé = question_id)
+        context:
+          $ref: '#/components/schemas/ClassifyContext'
+
+    ClassifyContext:
+      type: object
+      required:
+        - type_import_export
+        - origin_country
+      properties:
+        type_import_export:
+          $ref: '#/components/schemas/ImportExportType'
+        origin_country:
+          type: string
+
+    HSResult:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          $ref: '#/components/schemas/ClassifyStatus'
+        recommended_code:
+          type: string
+          pattern: '^\d{10}$'
+          nullable: true
+          description: Code HS 10 chiffres recommandé
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          nullable: true
+          description: Score de confiance entre 0 et 1
+        confidence_level:
+          $ref: '#/components/schemas/ConfidenceLevel'
+        justification_short:
+          type: string
+          nullable: true
+          description: Justification courte de la classification
+        alternatives:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/AlternativeCode'
+          description: Codes alternatifs possibles
+        evidence:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/Evidence'
+          description: Preuves utilisées pour la classification
+        next_question:
+          $ref: '#/components/schemas/NextQuestion'
+        error_message:
+          type: string
+          nullable: true
+          description: Message d'erreur si status = ERROR
+
+    ClassificationResultSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ClassifyStatus'
+        recommended_code:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+          nullable: true
+        confidence_level:
+          $ref: '#/components/schemas/ConfidenceLevel'
+        created_at:
+          type: string
+          format: date-time
+
+    ClassificationResult:
+      type: object
+      required:
+        - id
+        - case_id
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        case_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ClassifyStatus'
+        recommended_code:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+          nullable: true
+        confidence_level:
+          $ref: '#/components/schemas/ConfidenceLevel'
+        justification_short:
+          type: string
+          nullable: true
+        alternatives:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/AlternativeCode'
+        evidence:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/Evidence'
+        next_question:
+          $ref: '#/components/schemas/NextQuestion'
+        answers:
+          type: object
+          additionalProperties:
+            type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    AlternativeCode:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          pattern: '^\d{6,10}$'
+        label:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        reason:
+          type: string
+          description: Raison pour laquelle ce code est une alternative
+
+    Evidence:
+      type: object
+      required:
+        - source
+        - ref
+        - text
+      properties:
+        source:
+          $ref: '#/components/schemas/EvidenceSource'
+        ref:
+          type: string
+          description: Référence du document
+        text:
+          type: string
+          description: Extrait du texte source
+        relevance_score:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    NextQuestion:
+      type: object
+      nullable: true
+      required:
+        - id
+        - text
+        - type
+      properties:
+        id:
+          type: string
+          description: Identifiant unique de la question
+        text:
+          type: string
+          description: Texte de la question à poser
+        type:
+          $ref: '#/components/schemas/QuestionType'
+        options:
+          type: array
+          items:
+            type: string
+          description: Options pour les questions de type select
+
+    # ============= Export =============
+    ExportPdfRequest:
+      type: object
+      required:
+        - case_id
+      properties:
+        case_id:
+          type: string
+          format: uuid
+
+    ExportPdfResponse:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          format: uri
+          description: URL du PDF généré
+        filename:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+
+    # ============= Audit =============
+    AuditLog:
+      type: object
+      required:
+        - id
+        - action
+        - user_id
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        action:
+          $ref: '#/components/schemas/AuditAction'
+        user_id:
+          type: string
+          format: uuid
+        user_phone:
+          type: string
+        meta:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    # ============= Common =============
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    # ============= Enums =============
+    ImportExportType:
+      type: string
+      enum:
+        - import
+        - export
+
+    CaseStatus:
+      type: string
+      enum:
+        - IN_PROGRESS
+        - RESULT_READY
+        - VALIDATED
+        - ERROR
+
+    ClassifyStatus:
+      type: string
+      enum:
+        - NEED_INFO
+        - DONE
+        - ERROR
+        - LOW_CONFIDENCE
+
+    ConfidenceLevel:
+      type: string
+      enum:
+        - high
+        - medium
+        - low
+      nullable: true
+
+    CaseFileType:
+      type: string
+      enum:
+        - tech_sheet
+        - invoice
+        - packing_list
+        - certificate
+        - dum
+        - photo_product
+        - photo_label
+        - photo_plate
+        - other
+        - admin_ingestion
+
+    EvidenceSource:
+      type: string
+      enum:
+        - omd
+        - maroc
+        - lois
+        - dum
+
+    QuestionType:
+      type: string
+      enum:
+        - yesno
+        - select
+        - text
+
+    AuditAction:
+      type: string
+      enum:
+        - created
+        - file_uploaded
+        - classify_called
+        - question_answered
+        - result_ready
+        - validated
+        - exported
+
+    UserRole:
+      type: string
+      enum:
+        - admin
+        - agent
+        - manager

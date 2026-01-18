@@ -1,33 +1,6 @@
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
-
-// Domaines autorisés pour CORS
-const ALLOWED_ORIGINS = [
-  "https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app",
-  "http://localhost:5173",
-  "http://localhost:3000",
-];
-
-// Headers par défaut pour les fonctions helpers
-const corsHeaders = {
-  "Access-Control-Allow-Origin": ALLOWED_ORIGINS[0],
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Max-Age": "86400",
-};
-
-function getCorsHeaders(req: Request): Record<string, string> {
-  const origin = req.headers.get("Origin") || "";
-  
-  const isAllowed = ALLOWED_ORIGINS.some(allowed => origin === allowed) || 
-    origin.endsWith(".lovable.app") || 
-    origin.includes("localhost");
-  
-  return {
-    ...corsHeaders,
-    "Access-Control-Allow-Origin": isAllowed ? origin : ALLOWED_ORIGINS[0],
-  };
-}
+import { corsHeaders, getCorsHeaders } from "../_shared/cors.ts";
 
 // deno-lint-ignore no-explicit-any
 type SupabaseClientAny = SupabaseClient<any, any, any>;

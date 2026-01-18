@@ -1,5 +1,35 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ============================================================================
+// CONDITIONAL LOGGER
+// ============================================================================
+
+const IS_PRODUCTION = Deno.env.get("ENVIRONMENT") === "production";
+
+const logger = {
+  debug: (...args: unknown[]) => {
+    if (!IS_PRODUCTION) console.log("[DEBUG]", ...args);
+  },
+  info: (...args: unknown[]) => {
+    console.log("[INFO]", ...args);
+  },
+  warn: (...args: unknown[]) => {
+    console.warn("[WARN]", ...args);
+  },
+  error: (...args: unknown[]) => {
+    console.error("[ERROR]", ...args);
+  },
+  metric: (name: string, value: number, tags?: Record<string, string>) => {
+    console.log(JSON.stringify({
+      type: "metric",
+      name,
+      value,
+      tags,
+      timestamp: new Date().toISOString(),
+    }));
+  },
+};
+
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
   "https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app",
@@ -54,7 +84,7 @@ async function sendSmsViaTwilio(to: string, message: string): Promise<{ success:
   const fromPhone = Deno.env.get("TWILIO_PHONE_NUMBER");
 
   if (!accountSid || !authToken || !fromPhone) {
-    console.error("[send-otp] Twilio credentials not configured");
+    logger.error("[send-otp] Twilio credentials not configured");
     return { success: false, error: "SMS service not configured" };
   }
 
@@ -81,14 +111,14 @@ async function sendSmsViaTwilio(to: string, message: string): Promise<{ success:
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("[send-otp] Twilio error:", data);
+      logger.error("[send-otp] Twilio error:", data);
       return { success: false, error: data.message || "Failed to send SMS" };
     }
 
-    console.log(`[send-otp] SMS sent successfully, SID: ${data.sid}`);
+    logger.info(`[send-otp] SMS sent successfully, SID: ${data.sid}`);
     return { success: true };
   } catch (error) {
-    console.error("[send-otp] Twilio request failed:", error);
+    logger.error("[send-otp] Twilio request failed:", error);
     return { success: false, error: "SMS service unavailable" };
   }
 }
@@ -110,7 +140,7 @@ Deno.serve(async (req) => {
     }
 
     const normalizedPhone = normalizePhone(phone);
-    console.log(`[send-otp] Processing OTP request for phone: ${normalizedPhone}`);
+    logger.info(`[send-otp] Processing OTP request for phone: ${normalizedPhone}`);
 
     // Validate phone format (E.164)
     const phoneRegex = /^\+[1-9]\d{9,14}$/;
@@ -135,7 +165,7 @@ Deno.serve(async (req) => {
       .gte("created_at", oneHourAgo);
 
     if (recentCount && recentCount >= 5) {
-      console.log(`[send-otp] Rate limit exceeded for phone: ${normalizedPhone}`);
+      logger.warn(`[send-otp] Rate limit exceeded for phone: ${normalizedPhone}`);
       return new Response(
         JSON.stringify({ message: "Too many requests. Please wait before requesting a new code.", code: "RATE_LIMITED" }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -163,7 +193,7 @@ Deno.serve(async (req) => {
       });
 
     if (insertError) {
-      console.error(`[send-otp] Error storing OTP:`, insertError);
+      logger.error(`[send-otp] Error storing OTP:`, insertError);
       return new Response(
         JSON.stringify({ message: "Failed to generate OTP", code: "INTERNAL_ERROR" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -175,7 +205,7 @@ Deno.serve(async (req) => {
     const smsResult = await sendSmsViaTwilio(normalizedPhone, smsMessage);
 
     if (!smsResult.success) {
-      console.error(`[send-otp] Failed to send SMS:`, smsResult.error);
+      logger.error(`[send-otp] Failed to send SMS:`, smsResult.error);
       // Delete the OTP since SMS failed
       await supabase
         .from("otp_codes")
@@ -189,7 +219,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`[send-otp] OTP sent to ${normalizedPhone} (expires: ${expiresAt.toISOString()})`);
+    logger.info(`[send-otp] OTP sent to ${normalizedPhone} (expires: ${expiresAt.toISOString()})`);
 
     // Return success
     return new Response(
@@ -201,7 +231,7 @@ Deno.serve(async (req) => {
     );
 
   } catch (error) {
-    console.error(`[send-otp] Unexpected error:`, error);
+    logger.error(`[send-otp] Unexpected error:`, error);
     return new Response(
       JSON.stringify({ message: "Internal server error", code: "INTERNAL_ERROR" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

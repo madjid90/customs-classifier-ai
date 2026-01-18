@@ -1,5 +1,35 @@
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ============================================================================
+// CONDITIONAL LOGGER
+// ============================================================================
+
+const IS_PRODUCTION = Deno.env.get("ENVIRONMENT") === "production";
+
+const logger = {
+  debug: (...args: unknown[]) => {
+    if (!IS_PRODUCTION) console.log("[DEBUG]", ...args);
+  },
+  info: (...args: unknown[]) => {
+    console.log("[INFO]", ...args);
+  },
+  warn: (...args: unknown[]) => {
+    console.warn("[WARN]", ...args);
+  },
+  error: (...args: unknown[]) => {
+    console.error("[ERROR]", ...args);
+  },
+  metric: (name: string, value: number, tags?: Record<string, string>) => {
+    console.log(JSON.stringify({
+      type: "metric",
+      name,
+      value,
+      tags,
+      timestamp: new Date().toISOString(),
+    }));
+  },
+};
+
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
   "https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app",
@@ -58,7 +88,7 @@ Deno.serve(async (req) => {
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
     if (authError || !user) {
-      console.error("Auth error:", authError);
+      logger.error("Auth error:", authError);
       return new Response(
         JSON.stringify({ error: "Invalid token" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -74,7 +104,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (roleError || !roleData) {
-      console.error("Admin check failed:", roleError);
+      logger.warn("Admin check failed:", roleError);
       return new Response(
         JSON.stringify({ error: "Admin access required" }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -86,7 +116,7 @@ Deno.serve(async (req) => {
     const pathParts = url.pathname.split("/").filter(Boolean);
     const action = pathParts.slice(1).join("/");
     
-    console.log(`Admin action: ${action}, Method: ${req.method}, User: ${user.id}`);
+    logger.info(`Admin action: ${action}, Method: ${req.method}, User: ${user.id}`);
 
     // Route to appropriate handler
     if (action === "ingestion/list" && req.method === "GET") {
@@ -126,7 +156,7 @@ Deno.serve(async (req) => {
     );
 
   } catch (err) {
-    console.error("Admin error:", err);
+    logger.error("Admin error:", err);
     const errorMessage = err instanceof Error ? err.message : "Internal server error";
     return new Response(
       JSON.stringify({ error: errorMessage }),
@@ -158,7 +188,7 @@ async function handleIngestionList(supabase: SupabaseClientAny, url: URL) {
   const { data, error, count } = await query;
 
   if (error) {
-    console.error("List ingestion error:", error);
+    logger.error("List ingestion error:", error);
     return new Response(
       JSON.stringify({ error: "Failed to list ingestion files" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -211,14 +241,14 @@ async function handleIngestionRegister(
     .single();
 
   if (error) {
-    console.error("Register ingestion error:", error);
+    logger.error("Register ingestion error:", error);
     return new Response(
       JSON.stringify({ error: "Failed to register ingestion" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 
-  console.log(`Ingestion registered: ${data.id} by user ${userId}`);
+  logger.info(`Ingestion registered: ${data.id} by user ${userId}`);
 
   return new Response(
     JSON.stringify(data),
@@ -273,7 +303,7 @@ async function handleEtlRun(
     .eq("id", ingestion_id);
 
   if (updateError) {
-    console.error("Update status error:", updateError);
+    logger.error("Update status error:", updateError);
     return new Response(
       JSON.stringify({ error: "Failed to start ETL" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -287,7 +317,7 @@ async function handleEtlRun(
     message: `ETL started by admin ${userId}`,
   });
 
-  console.log(`ETL started for ingestion: ${ingestion_id} by user ${userId}`);
+  logger.info(`ETL started for ingestion: ${ingestion_id} by user ${userId}`);
 
   return new Response(
     JSON.stringify({ 
@@ -318,7 +348,7 @@ async function handleIngestionLogs(
     .order("created_at", { ascending: true });
 
   if (error) {
-    console.error("Get logs error:", error);
+    logger.error("Get logs error:", error);
     return new Response(
       JSON.stringify({ error: "Failed to get logs" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -375,7 +405,7 @@ async function handleIngestionRetry(
     .eq("id", ingestionId);
 
   if (updateError) {
-    console.error("Retry error:", updateError);
+    logger.error("Retry error:", updateError);
     return new Response(
       JSON.stringify({ error: "Failed to retry ingestion" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -389,7 +419,7 @@ async function handleIngestionRetry(
     message: `Ingestion reset for retry by admin ${userId}`,
   });
 
-  console.log(`Ingestion retried: ${ingestionId} by user ${userId}`);
+  logger.info(`Ingestion retried: ${ingestionId} by user ${userId}`);
 
   return new Response(
     JSON.stringify({ 
@@ -436,7 +466,7 @@ async function handleIngestionDisable(
     .eq("id", ingestionId);
 
   if (updateError) {
-    console.error("Disable error:", updateError);
+    logger.error("Disable error:", updateError);
     return new Response(
       JSON.stringify({ error: "Failed to disable ingestion" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -450,7 +480,7 @@ async function handleIngestionDisable(
     message: `Ingestion disabled by admin ${userId}`,
   });
 
-  console.log(`Ingestion disabled: ${ingestionId} by user ${userId}`);
+  logger.info(`Ingestion disabled: ${ingestionId} by user ${userId}`);
 
   return new Response(
     JSON.stringify({ 
@@ -489,7 +519,7 @@ async function handleKbSearch(supabase: SupabaseClientAny, url: URL) {
   const { data, error } = await dbQuery;
 
   if (error) {
-    console.error("KB search error:", error);
+    logger.error("KB search error:", error);
     return new Response(
       JSON.stringify({ error: "Search failed" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

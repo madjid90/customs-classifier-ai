@@ -1,6 +1,36 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SignJWT } from "https://deno.land/x/jose@v4.14.4/index.ts";
 
+// ============================================================================
+// CONDITIONAL LOGGER
+// ============================================================================
+
+const IS_PRODUCTION = Deno.env.get("ENVIRONMENT") === "production";
+
+const logger = {
+  debug: (...args: unknown[]) => {
+    if (!IS_PRODUCTION) console.log("[DEBUG]", ...args);
+  },
+  info: (...args: unknown[]) => {
+    console.log("[INFO]", ...args);
+  },
+  warn: (...args: unknown[]) => {
+    console.warn("[WARN]", ...args);
+  },
+  error: (...args: unknown[]) => {
+    console.error("[ERROR]", ...args);
+  },
+  metric: (name: string, value: number, tags?: Record<string, string>) => {
+    console.log(JSON.stringify({
+      type: "metric",
+      name,
+      value,
+      tags,
+      timestamp: new Date().toISOString(),
+    }));
+  },
+};
+
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [
   "https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app",
@@ -58,7 +88,7 @@ Deno.serve(async (req) => {
     }
 
     const normalizedPhone = normalizePhone(phone);
-    console.log(`[verify-otp] Verifying OTP for phone: ${normalizedPhone}`);
+    logger.info(`[verify-otp] Verifying OTP for phone: ${normalizedPhone}`);
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -75,7 +105,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (fetchError || !otpRecord) {
-      console.log(`[verify-otp] No OTP found for phone: ${normalizedPhone}`);
+      logger.warn(`[verify-otp] No OTP found for phone: ${normalizedPhone}`);
       return new Response(
         JSON.stringify({ message: "Invalid or expired OTP", code: "INVALID_OTP" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -84,7 +114,7 @@ Deno.serve(async (req) => {
 
     // Check if OTP is expired
     if (new Date(otpRecord.expires_at) < new Date()) {
-      console.log(`[verify-otp] OTP expired for phone: ${normalizedPhone}`);
+      logger.warn(`[verify-otp] OTP expired for phone: ${normalizedPhone}`);
       return new Response(
         JSON.stringify({ message: "OTP has expired. Please request a new code.", code: "OTP_EXPIRED" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -93,7 +123,7 @@ Deno.serve(async (req) => {
 
     // Check attempts (max 5)
     if (otpRecord.attempts >= 5) {
-      console.log(`[verify-otp] Too many attempts for phone: ${normalizedPhone}`);
+      logger.warn(`[verify-otp] Too many attempts for phone: ${normalizedPhone}`);
       return new Response(
         JSON.stringify({ message: "Too many failed attempts. Account temporarily locked.", code: "LOCKED" }),
         { status: 423, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -108,7 +138,7 @@ Deno.serve(async (req) => {
         .update({ attempts: otpRecord.attempts + 1 })
         .eq("id", otpRecord.id);
 
-      console.log(`[verify-otp] Invalid OTP attempt for phone: ${normalizedPhone}`);
+      logger.warn(`[verify-otp] Invalid OTP attempt for phone: ${normalizedPhone}`);
       return new Response(
         JSON.stringify({ message: "Invalid OTP code", code: "INVALID_OTP" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -121,7 +151,7 @@ Deno.serve(async (req) => {
       .update({ verified: true })
       .eq("id", otpRecord.id);
 
-    console.log(`[verify-otp] OTP verified successfully for phone: ${normalizedPhone}`);
+    logger.info(`[verify-otp] OTP verified successfully for phone: ${normalizedPhone}`);
 
     // Find or create user profile
     let { data: profile } = await supabase
@@ -134,7 +164,7 @@ Deno.serve(async (req) => {
     let companyId: string;
 
     if (!profile) {
-      console.log(`[verify-otp] Creating new user for phone: ${normalizedPhone}`);
+      logger.info(`[verify-otp] Creating new user for phone: ${normalizedPhone}`);
       
       // Create a new company
       const { data: newCompany, error: companyError } = await supabase
@@ -144,7 +174,7 @@ Deno.serve(async (req) => {
         .single();
 
       if (companyError || !newCompany) {
-        console.error(`[verify-otp] Error creating company:`, companyError);
+        logger.error(`[verify-otp] Error creating company:`, companyError);
         return new Response(
           JSON.stringify({ message: "Failed to create account", code: "INTERNAL_ERROR" }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -168,7 +198,7 @@ Deno.serve(async (req) => {
         .single();
 
       if (profileError || !newProfile) {
-        console.error(`[verify-otp] Error creating profile:`, profileError);
+        logger.error(`[verify-otp] Error creating profile:`, profileError);
         return new Response(
           JSON.stringify({ message: "Failed to create profile", code: "INTERNAL_ERROR" }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -186,12 +216,12 @@ Deno.serve(async (req) => {
         });
       
       if (roleError) {
-        console.error(`[verify-otp] Error inserting role:`, roleError);
+        logger.error(`[verify-otp] Error inserting role:`, roleError);
       } else {
-        console.log(`[verify-otp] Assigned agent role to user: ${userId}`);
+        logger.debug(`[verify-otp] Assigned agent role to user: ${userId}`);
       }
 
-      console.log(`[verify-otp] Created new user with ID: ${userId}`);
+      logger.info(`[verify-otp] Created new user with ID: ${userId}`);
     } else {
       userId = profile.user_id;
       companyId = profile.company_id;
@@ -224,7 +254,7 @@ Deno.serve(async (req) => {
       .setExpirationTime(expiresAtTimestamp)
       .sign(secretKey);
 
-    console.log(`[verify-otp] Generated token for user: ${userId}`);
+    logger.info(`[verify-otp] Generated token for user: ${userId}`);
 
     return new Response(
       JSON.stringify({
@@ -241,7 +271,7 @@ Deno.serve(async (req) => {
     );
 
   } catch (error) {
-    console.error(`[verify-otp] Unexpected error:`, error);
+    logger.error(`[verify-otp] Unexpected error:`, error);
     return new Response(
       JSON.stringify({ message: "Internal server error", code: "INTERNAL_ERROR" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

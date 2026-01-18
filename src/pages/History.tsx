@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { getCases, getCaseDetail } from "@/lib/api-client";
 import { Case, CaseStatus, CaseDetailResponse, AuditEntry, CASE_STATUS_LABELS, FILE_TYPE_LABELS } from "@/lib/types";
 import { useAuth } from "@/contexts/AuthContext";
@@ -18,9 +20,10 @@ import {
   ChevronRight,
   ArrowRight,
   FileText,
-  Calendar,
+  Calendar as CalendarIcon,
   User,
-  Filter
+  Filter,
+  X
 } from "lucide-react";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -29,7 +32,7 @@ import { cn } from "@/lib/utils";
 const STATUSES: CaseStatus[] = ["IN_PROGRESS", "RESULT_READY", "VALIDATED", "ERROR"];
 
 export default function HistoryPage() {
-  const { hasRole } = useAuth();
+  const { hasRole, user } = useAuth();
   
   const [cases, setCases] = useState<Case[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -40,6 +43,9 @@ export default function HistoryPage() {
   // Filters
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
+  const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
+  const [createdByFilter, setCreatedByFilter] = useState<string>("all");
   
   // Detail drawer
   const [selectedCase, setSelectedCase] = useState<CaseDetailResponse | null>(null);
@@ -48,9 +54,12 @@ export default function HistoryPage() {
 
   const limit = 20;
 
+  // Check if user is manager or admin to show created_by filter
+  const canFilterByUser = hasRole("manager") || hasRole("admin");
+
   useEffect(() => {
     fetchCases();
-  }, [offset, statusFilter]);
+  }, [offset, statusFilter, dateFrom, dateTo, createdByFilter]);
 
   async function fetchCases() {
     setIsLoading(true);
@@ -58,6 +67,9 @@ export default function HistoryPage() {
       const params: Record<string, unknown> = { limit, offset };
       if (search) params.q = search;
       if (statusFilter && statusFilter !== "all") params.status = statusFilter;
+      if (dateFrom) params.date_from = format(dateFrom, "yyyy-MM-dd");
+      if (dateTo) params.date_to = format(dateTo, "yyyy-MM-dd");
+      if (createdByFilter === "me" && user?.id) params.created_by = user.id;
       
       const response = await getCases(params as any);
       setCases(response.data.items);
@@ -75,6 +87,17 @@ export default function HistoryPage() {
     setOffset(0);
     fetchCases();
   };
+
+  const clearFilters = () => {
+    setSearch("");
+    setStatusFilter("all");
+    setDateFrom(undefined);
+    setDateTo(undefined);
+    setCreatedByFilter("all");
+    setOffset(0);
+  };
+
+  const hasActiveFilters = search || statusFilter !== "all" || dateFrom || dateTo || createdByFilter !== "all";
 
   const handleOpenDetail = async (caseItem: Case) => {
     setDrawerOpen(true);
@@ -124,33 +147,115 @@ export default function HistoryPage() {
           {/* Filters */}
           <Card>
             <CardContent className="py-4">
-              <form onSubmit={handleSearch} className="flex flex-wrap items-center gap-4">
-                <div className="relative flex-1 min-w-[200px]">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    placeholder="Rechercher par nom de produit..."
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="pl-10"
-                  />
+              <form onSubmit={handleSearch} className="space-y-4">
+                {/* Row 1: Search and Status */}
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      placeholder="Rechercher par nom de produit..."
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      className="pl-10"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Filter className="h-4 w-4 text-muted-foreground" />
+                    <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setOffset(0); }}>
+                      <SelectTrigger className="w-40">
+                        <SelectValue placeholder="Statut" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Tous les statuts</SelectItem>
+                        {STATUSES.map((s) => (
+                          <SelectItem key={s} value={s}>{CASE_STATUS_LABELS[s]}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Filter className="h-4 w-4 text-muted-foreground" />
-                  <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setOffset(0); }}>
-                    <SelectTrigger className="w-40">
-                      <SelectValue placeholder="Statut" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Tous les statuts</SelectItem>
-                      {STATUSES.map((s) => (
-                        <SelectItem key={s} value={s}>{CASE_STATUS_LABELS[s]}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                
+                {/* Row 2: Date filters and Created By */}
+                <div className="flex flex-wrap items-center gap-4">
+                  {/* Date From */}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          "w-[160px] justify-start text-left font-normal",
+                          !dateFrom && "text-muted-foreground"
+                        )}
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {dateFrom ? format(dateFrom, "dd/MM/yyyy") : "Date debut"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={dateFrom}
+                        onSelect={(date) => { setDateFrom(date); setOffset(0); }}
+                        disabled={(date) => dateTo ? date > dateTo : false}
+                        initialFocus
+                        className={cn("p-3 pointer-events-auto")}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  
+                  {/* Date To */}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          "w-[160px] justify-start text-left font-normal",
+                          !dateTo && "text-muted-foreground"
+                        )}
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {dateTo ? format(dateTo, "dd/MM/yyyy") : "Date fin"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={dateTo}
+                        onSelect={(date) => { setDateTo(date); setOffset(0); }}
+                        disabled={(date) => dateFrom ? date < dateFrom : false}
+                        initialFocus
+                        className={cn("p-3 pointer-events-auto")}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  
+                  {/* Created By Filter - Only for managers/admins */}
+                  {canFilterByUser && (
+                    <div className="flex items-center gap-2">
+                      <User className="h-4 w-4 text-muted-foreground" />
+                      <Select value={createdByFilter} onValueChange={(v) => { setCreatedByFilter(v); setOffset(0); }}>
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Cree par" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Tous les utilisateurs</SelectItem>
+                          <SelectItem value="me">Mes dossiers</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                  
+                  <Button type="submit" variant="secondary">
+                    Rechercher
+                  </Button>
+                  
+                  {hasActiveFilters && (
+                    <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
+                      <X className="mr-1 h-4 w-4" />
+                      Effacer
+                    </Button>
+                  )}
                 </div>
-                <Button type="submit" variant="secondary">
-                  Rechercher
-                </Button>
               </form>
             </CardContent>
           </Card>

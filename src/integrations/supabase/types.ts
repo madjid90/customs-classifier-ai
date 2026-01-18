@@ -305,6 +305,7 @@ export type Database = {
       }
       hs_codes: {
         Row: {
+          active: boolean
           active_version_label: string
           chapter_2: string
           code_10: string
@@ -318,6 +319,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          active?: boolean
           active_version_label: string
           chapter_2: string
           code_10: string
@@ -331,6 +333,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          active?: boolean
           active_version_label?: string
           chapter_2?: string
           code_10?: string
@@ -404,6 +407,47 @@ export type Database = {
           version_label?: string
         }
         Relationships: []
+      }
+      ingestion_ambiguities: {
+        Row: {
+          ambiguity_type: string
+          created_at: string
+          description: string
+          id: string
+          ingestion_id: string | null
+          resolution_notes: string | null
+          resolved: boolean
+          source_row: string
+        }
+        Insert: {
+          ambiguity_type: string
+          created_at?: string
+          description: string
+          id?: string
+          ingestion_id?: string | null
+          resolution_notes?: string | null
+          resolved?: boolean
+          source_row: string
+        }
+        Update: {
+          ambiguity_type?: string
+          created_at?: string
+          description?: string
+          id?: string
+          ingestion_id?: string | null
+          resolution_notes?: string | null
+          resolved?: boolean
+          source_row?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ingestion_ambiguities_ingestion_id_fkey"
+            columns: ["ingestion_id"]
+            isOneToOne: false
+            referencedRelation: "ingestion_files"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       ingestion_files: {
         Row: {
@@ -601,6 +645,25 @@ export type Database = {
     }
     Functions: {
       cleanup_expired_otps: { Args: never; Returns: undefined }
+      get_chunks_without_embeddings: {
+        Args: { batch_size?: number }
+        Returns: {
+          id: string
+          text: string
+        }[]
+      }
+      get_ingestion_stats: {
+        Args: never
+        Returns: {
+          active_hs_codes: number
+          kb_chunks_with_embeddings: number
+          total_ambiguities: number
+          total_dum_records: number
+          total_hs_codes: number
+          total_kb_chunks: number
+          unresolved_ambiguities: number
+        }[]
+      }
       get_user_company_id: { Args: { _user_id: string }; Returns: string }
       has_role: {
         Args: {
@@ -643,6 +706,10 @@ export type Database = {
           text: string
           version_label: string
         }[]
+      }
+      update_chunk_embedding: {
+        Args: { chunk_id: string; embedding_vector: string }
+        Returns: undefined
       }
     }
     Enums: {

@@ -14,6 +14,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 // ============================================================================
 
 type KBSource = "omd" | "maroc" | "lois" | "dum";
+type AmbiguityType = "multiple_codes" | "range" | "exclusion" | "note_explicative" | "format_error" | "other";
 
 interface ImportRequest {
   source: KBSource;
@@ -22,6 +23,7 @@ interface ImportRequest {
   chunk_size?: number;
   chunk_overlap?: number;
   clear_existing?: boolean;
+  ingestion_id?: string;
 }
 
 interface DocumentInput {
@@ -36,6 +38,12 @@ interface ChunkResult {
   chunks_created: number;
 }
 
+interface Ambiguity {
+  source_row: string;
+  ambiguity_type: AmbiguityType;
+  description: string;
+}
+
 interface ImportResponse {
   success: boolean;
   source: KBSource;
@@ -44,11 +52,147 @@ interface ImportResponse {
   total_chunks_created: number;
   results: ChunkResult[];
   errors: string[];
+  ambiguities: Ambiguity[];
+}
+
+// ============================================================================
+// AMBIGUITY DETECTION & LOGGING
+// ============================================================================
+
+function detectAmbiguities(content: string, docId: string): Ambiguity[] {
+  const ambiguities: Ambiguity[] = [];
+
+  // Détecter les codes multiples dans une même cellule/ligne
+  const multipleCodesPattern = /(\d{4,10})\s*[,;\/]\s*(\d{4,10})/g;
+  let match;
+  while ((match = multipleCodesPattern.exec(content)) !== null) {
+    ambiguities.push({
+      source_row: match[0].substring(0, 200),
+      ambiguity_type: "multiple_codes",
+      description: `Codes multiples détectés: ${match[1]} et ${match[2]} dans ${docId}`,
+    });
+  }
+
+  // Détecter les ranges de codes (ex: 01012100-01012900)
+  const rangePattern = /(\d{6,10})\s*[-–]\s*(\d{6,10})/g;
+  while ((match = rangePattern.exec(content)) !== null) {
+    const start = match[1];
+    const end = match[2];
+    // Vérifier que c'est bien un range (même préfixe, différent suffix)
+    if (start.substring(0, 4) === end.substring(0, 4) && start !== end) {
+      ambiguities.push({
+        source_row: match[0].substring(0, 200),
+        ambiguity_type: "range",
+        description: `Range de codes détecté: ${start} à ${end} dans ${docId}`,
+      });
+    }
+  }
+
+  // Détecter les exclusions (ex: "à l'exclusion de", "sauf", "except")
+  const exclusionPatterns = [
+    /à\s+l['']exclusion\s+de\s+([^.]+)/gi,
+    /sauf\s+([^.]+)/gi,
+    /excepté\s+([^.]+)/gi,
+    /non\s+compris\s+([^.]+)/gi,
+    /à\s+l['']exception\s+de\s+([^.]+)/gi,
+  ];
+
+  for (const pattern of exclusionPatterns) {
+    while ((match = pattern.exec(content)) !== null) {
+      ambiguities.push({
+        source_row: match[0].substring(0, 200),
+        ambiguity_type: "exclusion",
+        description: `Clause d'exclusion: "${match[0].substring(0, 100)}" dans ${docId}`,
+      });
+    }
+  }
+
+  // Détecter les notes explicatives
+  const notePatterns = [
+    /Note\s*\d*\s*[:.\-]\s*([^.]+)/gi,
+    /N\.B\.\s*[:.\-]?\s*([^.]+)/gi,
+    /Remarque\s*[:.\-]\s*([^.]+)/gi,
+  ];
+
+  for (const pattern of notePatterns) {
+    while ((match = pattern.exec(content)) !== null) {
+      ambiguities.push({
+        source_row: match[0].substring(0, 200),
+        ambiguity_type: "note_explicative",
+        description: `Note explicative: "${match[0].substring(0, 100)}" dans ${docId}`,
+      });
+    }
+  }
+
+  return ambiguities;
+}
+
+async function logAmbiguities(
+  supabase: any,
+  ambiguities: Ambiguity[],
+  ingestionId?: string
+): Promise<void> {
+  if (ambiguities.length === 0 || !ingestionId) return;
+
+  const records = ambiguities.slice(0, 100).map(a => ({
+    ingestion_id: ingestionId,
+    source_row: a.source_row.substring(0, 1000),
+    ambiguity_type: a.ambiguity_type,
+    description: a.description.substring(0, 2000),
+  }));
+
+  const { error } = await supabase.from("ingestion_ambiguities").insert(records);
+  if (error) {
+    console.error("[import-kb] Error logging ambiguities:", error);
+  }
+}
+
+// ============================================================================
+// HS CODE RANGE EXPANSION
+// ============================================================================
+
+function expandHSCodeRange(start: string, end: string): string[] {
+  // Normaliser à 10 chiffres
+  const startClean = start.replace(/\D/g, '').padEnd(10, '0').substring(0, 10);
+  const endClean = end.replace(/\D/g, '').padEnd(10, '0').substring(0, 10);
+  
+  // Trouver le préfixe commun
+  let commonPrefix = '';
+  for (let i = 0; i < 10; i++) {
+    if (startClean[i] === endClean[i]) {
+      commonPrefix += startClean[i];
+    } else {
+      break;
+    }
+  }
+  
+  // Si pas de préfixe commun ou range trop large, retourner juste les bornes
+  if (commonPrefix.length < 4) {
+    return [startClean, endClean];
+  }
+  
+  // Calculer les codes intermédiaires (limité à 100 pour éviter explosion)
+  const codes: string[] = [];
+  const startNum = parseInt(startClean.substring(commonPrefix.length) || '0');
+  const endNum = parseInt(endClean.substring(commonPrefix.length) || '0');
+  
+  const step = Math.max(1, Math.floor((endNum - startNum) / 100));
+  
+  for (let i = startNum; i <= endNum && codes.length < 100; i += step) {
+    const suffix = i.toString().padStart(10 - commonPrefix.length, '0');
+    codes.push(commonPrefix + suffix);
+  }
+  
+  // S'assurer que le dernier code est inclus
+  if (codes[codes.length - 1] !== endClean) {
+    codes.push(endClean);
+  }
+  
+  return codes;
 }
 
 // ============================================================================
 // TEXT CHUNKING
-// ============================================================================
 
 interface Chunk {
   text: string;
@@ -538,6 +682,18 @@ serve(async (req) => {
 
     const totalChunks = importResult.results.reduce((sum, r) => sum + r.chunks_created, 0);
 
+    // Détecter les ambiguïtés dans tous les documents
+    const allAmbiguities: Ambiguity[] = [];
+    for (const doc of documents) {
+      const docAmbiguities = detectAmbiguities(doc.content, doc.doc_id);
+      allAmbiguities.push(...docAmbiguities);
+    }
+
+    // Logger les ambiguïtés si ingestion_id fourni
+    if (body.ingestion_id && allAmbiguities.length > 0) {
+      await logAmbiguities(supabase, allAmbiguities, body.ingestion_id);
+    }
+
     const response: ImportResponse = {
       success: importResult.errors.length === 0,
       source,
@@ -546,9 +702,10 @@ serve(async (req) => {
       total_chunks_created: totalChunks,
       results: importResult.results,
       errors: importResult.errors,
+      ambiguities: allAmbiguities.slice(0, 50), // Limiter la réponse
     };
 
-    console.log(`Import complete: ${totalChunks} chunks created, ${importResult.errors.length} errors`);
+    console.log(`Import complete: ${totalChunks} chunks, ${importResult.errors.length} errors, ${allAmbiguities.length} ambiguities`);
 
     return new Response(
       JSON.stringify(response),
@@ -560,7 +717,8 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error" 
+        error: error instanceof Error ? error.message : "Unknown error",
+        ambiguities: []
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

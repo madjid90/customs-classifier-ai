@@ -23,6 +23,12 @@ export interface ChunkResult {
   chunks_created: number;
 }
 
+export interface Ambiguity {
+  source_row: string;
+  ambiguity_type: "multiple_codes" | "range" | "exclusion" | "note_explicative" | "format_error" | "other";
+  description: string;
+}
+
 export interface ImportKBResponse {
   success: boolean;
   source: KBSource;
@@ -31,6 +37,22 @@ export interface ImportKBResponse {
   total_chunks_created: number;
   results: ChunkResult[];
   errors: string[];
+  ambiguities: Ambiguity[];
+}
+
+export interface EmbeddingStats {
+  total_chunks: number;
+  with_embeddings: number;
+  without_embeddings: number;
+  percentage_complete: number;
+}
+
+export interface EmbeddingBatchResult {
+  success: boolean;
+  processed: number;
+  saved: number;
+  errors: number;
+  remaining: number;
 }
 
 export interface KBStats {
@@ -38,7 +60,52 @@ export interface KBStats {
   by_source: Record<KBSource, number>;
   by_version: Record<string, number>;
   recent_imports: { version_label: string; created_at: string; count: number }[];
+  embeddings?: EmbeddingStats;
 }
+
+// ============================================================================
+// EMBEDDING FUNCTIONS
+// ============================================================================
+
+export async function getEmbeddingStats(): Promise<EmbeddingStats> {
+  const { data, error } = await supabase.functions.invoke("generate-embeddings", {
+    body: { mode: "stats" },
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data.stats;
+}
+
+export async function generateEmbeddingsBatch(batchSize = 50): Promise<EmbeddingBatchResult> {
+  const { data, error } = await supabase.functions.invoke("generate-embeddings", {
+    body: { mode: "batch", batch_size: batchSize },
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data;
+}
+
+export async function generateSingleEmbedding(text: string, chunkId?: string): Promise<number[]> {
+  const { data, error } = await supabase.functions.invoke("generate-embeddings", {
+    body: { mode: "single", text, chunk_id: chunkId },
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data.embedding;
+}
+
+// ============================================================================
+// KB IMPORT FUNCTIONS
+// ============================================================================
 
 export async function importKBDocuments(request: ImportKBRequest): Promise<ImportKBResponse> {
   const { data, error } = await supabase.functions.invoke("import-kb", {

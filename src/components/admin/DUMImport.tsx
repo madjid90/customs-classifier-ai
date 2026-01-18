@@ -20,7 +20,9 @@ import {
   Calendar,
   FileText,
   MapPin,
-  Hash
+  Hash,
+  Sparkles,
+  Wand2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { 
@@ -36,6 +38,7 @@ import {
   DUMRecord,
   ColumnMapping
 } from "@/lib/dum-import-api";
+import { extractDUMRecords, ExtractedDUM } from "@/lib/extract-api";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 
@@ -64,6 +67,11 @@ export function DUMImport() {
   const [isImporting, setIsImporting] = useState(false);
   const [isDetecting, setIsDetecting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  
+  // AI Extraction
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractedRecords, setExtractedRecords] = useState<ExtractedDUM[]>([]);
+  const [extractionStats, setExtractionStats] = useState<{ valid: number; invalid: number } | null>(null);
   
   // Preview
   const [preview, setPreview] = useState<{ headers: string[]; rows: string[][] } | null>(null);
@@ -213,7 +221,95 @@ export function DUMImport() {
       });
     } finally {
       setIsImporting(false);
+  }
+
+  // AI Extraction for DUM
+  async function handleAIExtract() {
+    if (!fileContent) return;
+    
+    setIsExtracting(true);
+    setExtractedRecords([]);
+    setExtractionStats(null);
+    
+    try {
+      const result = await extractDUMRecords(fileContent);
+      
+      if (result.success && result.extracted.length > 0) {
+        setExtractedRecords(result.extracted);
+        setExtractionStats({ valid: result.stats.valid, invalid: result.stats.invalid });
+        
+        toast({
+          title: "Extraction IA réussie",
+          description: `${result.stats.valid} DUM extraits avec l'IA.`,
+        });
+      } else {
+        toast({
+          title: "Aucun DUM extrait",
+          description: result.errors?.join(", ") || "L'IA n'a pas pu extraire de DUM valides.",
+          variant: "destructive",
+        });
+      }
+    } catch (err) {
+      toast({
+        title: "Erreur d'extraction IA",
+        description: err instanceof Error ? err.message : "Erreur lors de l'extraction",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExtracting(false);
     }
+  }
+
+  // Import AI-extracted records directly to database
+  async function handleImportExtracted() {
+    if (extractedRecords.length === 0) return;
+    
+    setIsImporting(true);
+    
+    try {
+      // Convert to CSV for the standard import function
+      const csvContent = "dum_date;dum_number;product_description;hs_code_10;origin_country\n" +
+        extractedRecords.map(r => 
+          `${r.dum_date};${r.dum_number || ''};${r.product_description};${r.hs_code_10};${r.origin_country}`
+        ).join("\n");
+      
+      const mapping: ColumnMapping = {
+        dum_date: "dum_date",
+        dum_number: "dum_number",
+        product_description: "product_description",
+        hs_code_10: "hs_code_10",
+        origin_country: "origin_country"
+      };
+      
+      const result = await importDUMRecords(csvContent, "csv", mapping, skipDuplicates);
+      setImportResult(result);
+      
+      if (result.errors === 0) {
+        toast({
+          title: "Import réussi",
+          description: `${result.imported} DUM importés depuis l'extraction IA.`,
+        });
+        setExtractedRecords([]);
+        setExtractionStats(null);
+      } else {
+        toast({
+          title: "Import terminé avec erreurs",
+          description: `${result.imported} importés, ${result.errors} erreurs.`,
+          variant: "destructive",
+        });
+      }
+      
+      fetchStats();
+    } catch (err) {
+      toast({
+        title: "Erreur",
+        description: err instanceof Error ? err.message : "Erreur lors de l'import",
+        variant: "destructive",
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  }
   }
 
   async function handleSearch(e: React.FormEvent) {
@@ -429,23 +525,106 @@ export function DUMImport() {
                   </Label>
                 </div>
 
-                <Button 
-                  type="submit" 
-                  disabled={isImporting || !fileContent || !isMappingComplete()}
-                >
-                  {isImporting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Import en cours...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="mr-2 h-4 w-4" />
-                      Importer
-                    </>
-                  )}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button 
+                    type="submit" 
+                    disabled={isImporting || !fileContent || !isMappingComplete()}
+                  >
+                    {isImporting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Import en cours...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="mr-2 h-4 w-4" />
+                        Import standard
+                      </>
+                    )}
+                  </Button>
+                  
+                  <Button 
+                    type="button" 
+                    variant="secondary"
+                    disabled={isExtracting || !fileContent}
+                    onClick={handleAIExtract}
+                  >
+                    {isExtracting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Extraction IA...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="mr-2 h-4 w-4" />
+                        Extraction IA
+                      </>
+                    )}
+                  </Button>
+                </div>
               </form>
+
+              {/* AI Extraction Results */}
+              {extractedRecords.length > 0 && (
+                <div className="mt-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <Wand2 className="h-5 w-5 text-primary" />
+                      <h4 className="font-medium">Extraction IA</h4>
+                      <Badge variant="secondary">
+                        {extractedRecords.length} DUM extraits
+                      </Badge>
+                      {extractionStats && (
+                        <span className="text-xs text-muted-foreground">
+                          ({extractionStats.valid} valides, {extractionStats.invalid} ignorés)
+                        </span>
+                      )}
+                    </div>
+                    <Button 
+                      size="sm" 
+                      disabled={isImporting}
+                      onClick={handleImportExtracted}
+                    >
+                      {isImporting ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Upload className="mr-2 h-4 w-4" />
+                      )}
+                      Importer ces DUM
+                    </Button>
+                  </div>
+                  
+                  <div className="max-h-64 overflow-y-auto rounded border bg-background">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="text-xs">Date</TableHead>
+                          <TableHead className="text-xs">Numéro</TableHead>
+                          <TableHead className="text-xs">Produit</TableHead>
+                          <TableHead className="text-xs">Code HS</TableHead>
+                          <TableHead className="text-xs">Origine</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {extractedRecords.slice(0, 20).map((record, i) => (
+                          <TableRow key={i}>
+                            <TableCell className="text-xs">{record.dum_date}</TableCell>
+                            <TableCell className="text-xs">{record.dum_number || '-'}</TableCell>
+                            <TableCell className="text-xs max-w-[200px] truncate">{record.product_description}</TableCell>
+                            <TableCell className="font-mono text-xs">{formatHSCode(record.hs_code_10)}</TableCell>
+                            <TableCell className="text-xs">{record.origin_country}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    {extractedRecords.length > 20 && (
+                      <p className="text-xs text-muted-foreground p-2 text-center">
+                        ... et {extractedRecords.length - 20} autres DUM
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Import Result */}
               {importResult && (

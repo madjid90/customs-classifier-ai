@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
 import { 
   Upload, 
   FileSpreadsheet, 
@@ -17,7 +17,9 @@ import {
   CheckCircle, 
   AlertCircle,
   Download,
-  Eye
+  Eye,
+  Sparkles,
+  Wand2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { 
@@ -30,7 +32,7 @@ import {
   HSCodeStats,
   HSCode
 } from "@/lib/hs-import-api";
-import { useEffect } from "react";
+import { extractHSCodes, ExtractedHSCode, readFileAsText } from "@/lib/extract-api";
 
 export function HSCodeImport() {
   const { toast } = useToast();
@@ -47,6 +49,11 @@ export function HSCodeImport() {
   const [importMode, setImportMode] = useState<"upsert" | "insert">("upsert");
   const [isImporting, setIsImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  
+  // AI Extraction
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractedCodes, setExtractedCodes] = useState<ExtractedHSCode[]>([]);
+  const [extractionStats, setExtractionStats] = useState<{ valid: number; invalid: number } | null>(null);
   
   // Preview
   const [preview, setPreview] = useState<{ headers: string[]; rows: string[][] } | null>(null);
@@ -144,6 +151,86 @@ export function HSCodeImport() {
       }
       
       // Refresh stats
+      fetchStats();
+    } catch (err) {
+      toast({
+        title: "Erreur",
+        description: err instanceof Error ? err.message : "Erreur lors de l'import",
+        variant: "destructive",
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
+  // AI Extraction
+  async function handleAIExtract() {
+    if (!file || !fileContent) return;
+    
+    setIsExtracting(true);
+    setExtractedCodes([]);
+    setExtractionStats(null);
+    
+    try {
+      const result = await extractHSCodes(fileContent, versionLabel || undefined);
+      
+      if (result.success && result.extracted.length > 0) {
+        setExtractedCodes(result.extracted);
+        setExtractionStats({ valid: result.stats.valid, invalid: result.stats.invalid });
+        
+        toast({
+          title: "Extraction IA réussie",
+          description: `${result.stats.valid} codes extraits avec l'IA.`,
+        });
+      } else {
+        toast({
+          title: "Aucun code extrait",
+          description: result.errors?.join(", ") || "L'IA n'a pas pu extraire de codes valides.",
+          variant: "destructive",
+        });
+      }
+    } catch (err) {
+      toast({
+        title: "Erreur d'extraction IA",
+        description: err instanceof Error ? err.message : "Erreur lors de l'extraction",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExtracting(false);
+    }
+  }
+
+  // Import extracted codes
+  async function handleImportExtracted() {
+    if (extractedCodes.length === 0 || !versionLabel) return;
+    
+    setIsImporting(true);
+    
+    try {
+      // Convert extracted to CSV format for import
+      const csvContent = "code;label_fr;label_ar;unit\n" + 
+        extractedCodes.map(c => 
+          `${c.code_10};${c.label_fr};${c.label_ar || ''};${c.unit || ''}`
+        ).join("\n");
+      
+      const result = await importHSCodes(csvContent, "csv", versionLabel, importMode);
+      setImportResult(result);
+      
+      if (result.errors === 0) {
+        toast({
+          title: "Import réussi",
+          description: `${result.imported} codes importés depuis l'extraction IA.`,
+        });
+        setExtractedCodes([]);
+        setExtractionStats(null);
+      } else {
+        toast({
+          title: "Import terminé avec erreurs",
+          description: `${result.imported} importés, ${result.errors} erreurs.`,
+          variant: "destructive",
+        });
+      }
+      
       fetchStats();
     } catch (err) {
       toast({
@@ -337,20 +424,99 @@ export function HSCodeImport() {
                   </div>
                 )}
 
-                <Button type="submit" disabled={isImporting || !fileContent || !versionLabel}>
-                  {isImporting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Import en cours...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="mr-2 h-4 w-4" />
-                      Importer
-                    </>
-                  )}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit" disabled={isImporting || !fileContent || !versionLabel}>
+                    {isImporting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Import en cours...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="mr-2 h-4 w-4" />
+                        Import standard
+                      </>
+                    )}
+                  </Button>
+                  
+                  <Button 
+                    type="button" 
+                    variant="secondary"
+                    disabled={isExtracting || !fileContent}
+                    onClick={handleAIExtract}
+                  >
+                    {isExtracting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Extraction IA...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="mr-2 h-4 w-4" />
+                        Extraction IA
+                      </>
+                    )}
+                  </Button>
+                </div>
               </form>
+
+              {/* AI Extraction Results */}
+              {extractedCodes.length > 0 && (
+                <div className="mt-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <Wand2 className="h-5 w-5 text-primary" />
+                      <h4 className="font-medium">Extraction IA</h4>
+                      <Badge variant="secondary">
+                        {extractedCodes.length} codes extraits
+                      </Badge>
+                      {extractionStats && (
+                        <span className="text-xs text-muted-foreground">
+                          ({extractionStats.valid} valides, {extractionStats.invalid} ignorés)
+                        </span>
+                      )}
+                    </div>
+                    <Button 
+                      size="sm" 
+                      disabled={!versionLabel || isImporting}
+                      onClick={handleImportExtracted}
+                    >
+                      {isImporting ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Upload className="mr-2 h-4 w-4" />
+                      )}
+                      Importer ces codes
+                    </Button>
+                  </div>
+                  
+                  <div className="max-h-64 overflow-y-auto rounded border bg-background">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="text-xs">Code HS</TableHead>
+                          <TableHead className="text-xs">Libellé FR</TableHead>
+                          <TableHead className="text-xs">Chapitre</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {extractedCodes.slice(0, 20).map((code, i) => (
+                          <TableRow key={i}>
+                            <TableCell className="font-mono text-xs">{formatHSCode(code.code_10)}</TableCell>
+                            <TableCell className="text-xs max-w-md truncate">{code.label_fr}</TableCell>
+                            <TableCell className="text-xs">{code.chapter_2}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    {extractedCodes.length > 20 && (
+                      <p className="text-xs text-muted-foreground p-2 text-center">
+                        ... et {extractedCodes.length - 20} autres codes
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Import Result */}
               {importResult && (

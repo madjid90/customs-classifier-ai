@@ -60,3 +60,6 @@ verify_jwt = false
 
 [functions.import-kb]
 verify_jwt = false
+
+[functions.extract-data]
+verify_jwt = false

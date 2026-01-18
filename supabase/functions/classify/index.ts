@@ -33,6 +33,18 @@ interface HSCodeCandidate {
   restrictions: string[] | null;
 }
 
+interface ScoredCandidate extends HSCodeCandidate {
+  score: number;
+  scoreBreakdown: {
+    textSimilarity: number;
+    dumHistoryBonus: number;
+    kbMentionBonus: number;
+    originBonus: number;
+  };
+  dumMatches: number;
+  kbMentions: number;
+}
+
 interface KBChunk {
   id: string;
   source: string;
@@ -205,10 +217,188 @@ async function searchDUMHistory(
   return data || [];
 }
 
+// ============= INTELLIGENT SCORING =============
+
+function calculateTextSimilarity(text1: string, text2: string): number {
+  const words1 = new Set(text1.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const words2 = new Set(text2.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  
+  if (words1.size === 0 || words2.size === 0) return 0;
+  
+  let matches = 0;
+  for (const word of words1) {
+    if (words2.has(word)) matches++;
+  }
+  
+  // Jaccard-like similarity
+  const union = new Set([...words1, ...words2]);
+  return matches / union.size;
+}
+
+function calculateNGramSimilarity(text1: string, text2: string, n = 3): number {
+  const getNGrams = (text: string, n: number): Set<string> => {
+    const normalized = text.toLowerCase().replace(/\s+/g, " ");
+    const ngrams = new Set<string>();
+    for (let i = 0; i <= normalized.length - n; i++) {
+      ngrams.add(normalized.slice(i, i + n));
+    }
+    return ngrams;
+  };
+  
+  const ngrams1 = getNGrams(text1, n);
+  const ngrams2 = getNGrams(text2, n);
+  
+  if (ngrams1.size === 0 || ngrams2.size === 0) return 0;
+  
+  let matches = 0;
+  for (const ngram of ngrams1) {
+    if (ngrams2.has(ngram)) matches++;
+  }
+  
+  return (2 * matches) / (ngrams1.size + ngrams2.size);
+}
+
+function scoreCandidates(
+  candidates: HSCodeCandidate[],
+  productName: string,
+  dumRecords: DUMRecord[],
+  kbChunks: KBChunk[],
+  originCountry: string
+): ScoredCandidate[] {
+  console.log("Scoring candidates with intelligent algorithm...");
+  
+  // Create a map of DUM codes with their cumulative scores
+  const dumCodeScores = new Map<string, { count: number; avgReliability: number; descriptions: string[] }>();
+  for (const dum of dumRecords) {
+    const code = dum.hs_code_10.replace(/\./g, "");
+    const existing = dumCodeScores.get(code);
+    if (existing) {
+      existing.count++;
+      existing.avgReliability = (existing.avgReliability * (existing.count - 1) + dum.reliability_score) / existing.count;
+      existing.descriptions.push(dum.product_description);
+    } else {
+      dumCodeScores.set(code, {
+        count: 1,
+        avgReliability: dum.reliability_score,
+        descriptions: [dum.product_description],
+      });
+    }
+  }
+  
+  // Create a map of KB mentions per code
+  const kbCodeMentions = new Map<string, number>();
+  for (const chunk of kbChunks) {
+    // Look for HS code patterns in KB chunks
+    const codeMatches = chunk.text.match(/\b\d{4,10}\b/g) || [];
+    for (const code of codeMatches) {
+      if (code.length >= 4) {
+        const normalized = code.padEnd(10, "0");
+        const existing = kbCodeMentions.get(normalized) || 0;
+        kbCodeMentions.set(normalized, existing + chunk.similarity);
+      }
+    }
+  }
+  
+  const scoredCandidates: ScoredCandidate[] = candidates.map(candidate => {
+    const normalizedCode = candidate.code_10.replace(/\./g, "");
+    const code6 = normalizedCode.slice(0, 6);
+    
+    // 1. Text similarity score (40% weight max)
+    const wordSimilarity = calculateTextSimilarity(productName, candidate.label_fr);
+    const ngramSimilarity = calculateNGramSimilarity(productName, candidate.label_fr);
+    const textSimilarity = (wordSimilarity * 0.6 + ngramSimilarity * 0.4) * 40;
+    
+    // 2. DUM history bonus (35% weight max)
+    let dumHistoryBonus = 0;
+    let dumMatches = 0;
+    
+    // Exact code match in DUM
+    const exactDumMatch = dumCodeScores.get(normalizedCode);
+    if (exactDumMatch) {
+      dumHistoryBonus += (exactDumMatch.avgReliability / 100) * 25 * Math.min(exactDumMatch.count, 5) / 5;
+      dumMatches = exactDumMatch.count;
+      
+      // Bonus for similar product descriptions in DUM
+      for (const desc of exactDumMatch.descriptions) {
+        const descSimilarity = calculateTextSimilarity(productName, desc);
+        if (descSimilarity > 0.3) {
+          dumHistoryBonus += descSimilarity * 10;
+        }
+      }
+    }
+    
+    // Partial match (same chapter/heading)
+    for (const [dumCode, dumData] of dumCodeScores) {
+      if (dumCode !== normalizedCode && dumCode.startsWith(code6)) {
+        dumHistoryBonus += (dumData.avgReliability / 100) * 5 * Math.min(dumData.count, 3) / 3;
+      }
+    }
+    
+    dumHistoryBonus = Math.min(dumHistoryBonus, 35);
+    
+    // 3. KB mention bonus (15% weight max)
+    let kbMentionBonus = 0;
+    let kbMentions = 0;
+    
+    const kbExactMention = kbCodeMentions.get(normalizedCode);
+    if (kbExactMention) {
+      kbMentionBonus += Math.min(kbExactMention * 10, 15);
+      kbMentions++;
+    }
+    
+    // Check for chapter/heading mentions
+    for (const [kbCode, score] of kbCodeMentions) {
+      if (kbCode !== normalizedCode && kbCode.startsWith(code6)) {
+        kbMentionBonus += Math.min(score * 3, 5);
+        kbMentions++;
+      }
+    }
+    
+    kbMentionBonus = Math.min(kbMentionBonus, 15);
+    
+    // 4. Origin country bonus (10% weight max)
+    let originBonus = 0;
+    for (const dum of dumRecords) {
+      if (dum.hs_code_10.replace(/\./g, "") === normalizedCode && 
+          dum.origin_country.toLowerCase() === originCountry.toLowerCase()) {
+        originBonus = 10;
+        break;
+      }
+    }
+    
+    const totalScore = textSimilarity + dumHistoryBonus + kbMentionBonus + originBonus;
+    
+    return {
+      ...candidate,
+      score: Math.round(totalScore * 100) / 100,
+      scoreBreakdown: {
+        textSimilarity: Math.round(textSimilarity * 100) / 100,
+        dumHistoryBonus: Math.round(dumHistoryBonus * 100) / 100,
+        kbMentionBonus: Math.round(kbMentionBonus * 100) / 100,
+        originBonus,
+      },
+      dumMatches,
+      kbMentions,
+    };
+  });
+  
+  // Sort by score descending
+  scoredCandidates.sort((a, b) => b.score - a.score);
+  
+  console.log("Top 5 scored candidates:", scoredCandidates.slice(0, 5).map(c => ({
+    code: c.code_10,
+    label: c.label_fr.slice(0, 50),
+    score: c.score,
+    breakdown: c.scoreBreakdown,
+  })));
+  
+  return scoredCandidates;
+}
+
 // ============= PROMPTS =============
 
-function buildSystemPrompt(
-  candidates: HSCodeCandidate[],
+function buildSystemPromptWithScores(
+  scoredCandidates: ScoredCandidate[],
   kbChunks: KBChunk[],
   dumRecords: DUMRecord[]
 ): string {
@@ -221,16 +411,41 @@ RÈGLE ANTI-HALLUCINATION CRITIQUE:
 
 `;
 
-  // Add candidates list
-  if (candidates.length > 0) {
-    prompt += `=== CANDIDATS_VALIDES (seuls codes autorisés) ===\n`;
-    candidates.forEach(c => {
-      prompt += `- ${c.code_10}: ${c.label_fr}`;
-      if (c.unit) prompt += ` [Unité: ${c.unit}]`;
-      if (c.restrictions?.length) prompt += ` [Restrictions: ${c.restrictions.join(", ")}]`;
+  // Add scored candidates list (top 20)
+  const topCandidates = scoredCandidates.slice(0, 20);
+  if (topCandidates.length > 0) {
+    prompt += `=== CANDIDATS_VALIDES (classés par pertinence) ===\n`;
+    prompt += `Format: [Score] Code: Description [Bonus historique DUM] [Mentions KB]\n\n`;
+    
+    topCandidates.forEach((c, idx) => {
+      const rank = idx + 1;
+      const scoreLabel = c.score >= 50 ? "★★★" : c.score >= 30 ? "★★" : c.score >= 15 ? "★" : "";
+      
+      prompt += `${rank}. [${c.score.toFixed(1)}${scoreLabel}] ${c.code_10}: ${c.label_fr}`;
+      
+      if (c.dumMatches > 0) {
+        prompt += ` [📦 ${c.dumMatches} DUM: +${c.scoreBreakdown.dumHistoryBonus.toFixed(1)}pts]`;
+      }
+      if (c.kbMentions > 0) {
+        prompt += ` [📚 KB: +${c.scoreBreakdown.kbMentionBonus.toFixed(1)}pts]`;
+      }
+      if (c.scoreBreakdown.originBonus > 0) {
+        prompt += ` [🌍 Origine: +${c.scoreBreakdown.originBonus}pts]`;
+      }
+      if (c.unit) {
+        prompt += ` [Unité: ${c.unit}]`;
+      }
+      if (c.restrictions?.length) {
+        prompt += ` [⚠️ Restrictions]`;
+      }
       prompt += `\n`;
     });
-    prompt += `\n`;
+    
+    prompt += `\n💡 CONSEIL: Les codes avec un score élevé sont plus probables basés sur:\n`;
+    prompt += `   - Similarité textuelle avec le produit\n`;
+    prompt += `   - Historique des DUM de l'entreprise\n`;
+    prompt += `   - Mentions dans la documentation réglementaire\n`;
+    prompt += `   - Correspondance du pays d'origine\n\n`;
   } else {
     prompt += `⚠️ AUCUN CANDIDAT TROUVÉ - Tu DOIS répondre avec status="NEED_INFO" pour demander plus de détails.\n\n`;
   }
@@ -421,60 +636,74 @@ async function callLovableAI(
 function verifyCodeExists(
   recommendedCode: string | null,
   alternatives: Alternative[],
-  candidates: HSCodeCandidate[]
-): { passed: boolean; details: string; correctedCode: string | null } {
+  candidates: ScoredCandidate[]
+): { passed: boolean; details: string; correctedCode: string | null; bestCandidate: ScoredCandidate | null } {
   if (!recommendedCode) {
-    return { passed: true, details: "No code recommended", correctedCode: null };
+    return { passed: true, details: "No code recommended", correctedCode: null, bestCandidate: null };
   }
 
   // Normalize code (remove dots)
   const normalizedCode = recommendedCode.replace(/\./g, "");
-  const candidateCodes = candidates.map(c => c.code_10.replace(/\./g, ""));
-
+  
   // Check if recommended code exists in candidates
-  const exactMatch = candidateCodes.includes(normalizedCode);
+  const exactMatch = candidates.find(c => c.code_10.replace(/\./g, "") === normalizedCode);
   
   if (exactMatch) {
     return { 
       passed: true, 
-      details: `Code ${recommendedCode} verified in candidates list`,
-      correctedCode: recommendedCode 
+      details: `Code ${recommendedCode} verified (score: ${exactMatch.score.toFixed(1)})`,
+      correctedCode: recommendedCode,
+      bestCandidate: exactMatch,
     };
   }
 
-  // Check for partial match (first 6 digits)
+  // Check for partial match (first 6 digits) - prefer highest scored
   const code6 = normalizedCode.slice(0, 6);
-  const partialMatches = candidates.filter(c => 
-    c.code_10.replace(/\./g, "").startsWith(code6)
-  );
+  const partialMatches = candidates
+    .filter(c => c.code_10.replace(/\./g, "").startsWith(code6))
+    .sort((a, b) => b.score - a.score);
 
   if (partialMatches.length > 0) {
-    // Return the best partial match
-    const corrected = partialMatches[0].code_10;
+    const best = partialMatches[0];
     return {
       passed: false,
-      details: `Code ${recommendedCode} not found, corrected to ${corrected} (same chapter)`,
-      correctedCode: corrected,
+      details: `Code ${recommendedCode} not found, corrected to ${best.code_10} (score: ${best.score.toFixed(1)}, same heading)`,
+      correctedCode: best.code_10,
+      bestCandidate: best,
     };
   }
 
-  // Check alternatives
+  // Check alternatives - find the best scoring alternative
   for (const alt of alternatives) {
     const altNormalized = alt.code.replace(/\./g, "");
-    if (candidateCodes.includes(altNormalized)) {
+    const altCandidate = candidates.find(c => c.code_10.replace(/\./g, "") === altNormalized);
+    if (altCandidate) {
       return {
         passed: false,
-        details: `Recommended code ${recommendedCode} not found, using alternative ${alt.code}`,
+        details: `Recommended code ${recommendedCode} not found, using alternative ${alt.code} (score: ${altCandidate.score.toFixed(1)})`,
         correctedCode: alt.code,
+        bestCandidate: altCandidate,
       };
     }
   }
 
-  // No valid code found
+  // Fallback to highest scored candidate if nothing matches
+  if (candidates.length > 0) {
+    const best = candidates[0]; // Already sorted by score
+    return {
+      passed: false,
+      details: `HALLUCINATION: ${recommendedCode} invalid, suggesting best candidate ${best.code_10} (score: ${best.score.toFixed(1)})`,
+      correctedCode: best.code_10,
+      bestCandidate: best,
+    };
+  }
+
+  // No valid code found at all
   return {
     passed: false,
-    details: `HALLUCINATION DETECTED: Code ${recommendedCode} does not exist in nomenclature`,
+    details: `HALLUCINATION DETECTED: Code ${recommendedCode} does not exist and no candidates available`,
     correctedCode: null,
+    bestCandidate: null,
   };
 }
 
@@ -526,7 +755,7 @@ serve(async (req) => {
 
     // ============= STEP 1: RETRIEVE CANDIDATES =============
     console.log("Step 1: Retrieving candidate HS codes...");
-    const candidates = await getCandidateHSCodes(supabase, caseData.product_name, 30);
+    const rawCandidates = await getCandidateHSCodes(supabase, caseData.product_name, 50);
     
     // ============= STEP 2: RAG SEARCH =============
     console.log("Step 2: RAG search in knowledge base...");
@@ -534,7 +763,7 @@ serve(async (req) => {
       supabase, 
       caseData.product_name,
       ["omd", "maroc", "lois"],
-      10
+      15
     );
     
     // ============= STEP 3: DUM HISTORY =============
@@ -543,19 +772,31 @@ serve(async (req) => {
       supabase,
       caseData.product_name,
       caseData.company_id,
-      5
+      20
+    );
+    
+    // ============= STEP 4: INTELLIGENT SCORING =============
+    console.log("Step 4: Scoring candidates...");
+    const scoredCandidates = scoreCandidates(
+      rawCandidates,
+      caseData.product_name,
+      dumRecords,
+      kbChunks,
+      context.origin_country
     );
 
     // Log retrieval stats
     console.log("Retrieval stats:", {
-      candidates: candidates.length,
+      rawCandidates: rawCandidates.length,
+      scoredCandidates: scoredCandidates.length,
       kbChunks: kbChunks.length,
       dumRecords: dumRecords.length,
+      topScore: scoredCandidates[0]?.score || 0,
     });
 
-    // ============= STEP 4: BUILD PROMPTS & CALL AI =============
-    console.log("Step 4: Building prompts and calling AI...");
-    const systemPrompt = buildSystemPrompt(candidates, kbChunks, dumRecords);
+    // ============= STEP 5: BUILD PROMPTS & CALL AI =============
+    console.log("Step 5: Building prompts and calling AI...");
+    const systemPrompt = buildSystemPromptWithScores(scoredCandidates, kbChunks, dumRecords);
     const userPrompt = buildUserPrompt(body, caseData.product_name);
     
     let result: ClassifyResult;
@@ -578,13 +819,13 @@ serve(async (req) => {
       };
     }
 
-    // ============= STEP 5: ANTI-HALLUCINATION VERIFICATION =============
-    console.log("Step 5: Anti-hallucination verification...");
+    // ============= STEP 6: ANTI-HALLUCINATION VERIFICATION =============
+    console.log("Step 6: Anti-hallucination verification...");
     if (result.status === "DONE" && result.recommended_code) {
       const verification = verifyCodeExists(
         result.recommended_code,
         result.alternatives,
-        candidates
+        scoredCandidates
       );
       
       console.log("Verification result:", verification);

@@ -50,6 +50,7 @@ interface ImportResponse {
   results: ChunkResult[];
   errors: string[];
   ambiguities: Ambiguity[];
+  hs_sync_triggered?: boolean;
 }
 
 // ============================================================================
@@ -700,7 +701,52 @@ serve(async (req) => {
       results: importResult.results,
       errors: importResult.errors,
       ambiguities: allAmbiguities.slice(0, 50), // Limiter la réponse
+      hs_sync_triggered: source === "lois" && totalChunks > 0,
     };
+
+    // ========================================================================
+    // AUTO-SYNC HS FROM LAWS: Déclencher en background après import de lois
+    // ========================================================================
+    if (source === "lois" && totalChunks > 0) {
+      console.log(`[import-kb] Triggering background HS sync for version: ${version_label}`);
+      
+      // Background task pour synchroniser les codes HS
+      const syncTask = async () => {
+        try {
+          const syncResponse = await fetch(`${SUPABASE_URL}/functions/v1/sync-hs-from-laws`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+            },
+            body: JSON.stringify({
+              version_label: version_label,
+              dry_run: false,
+              limit: 100,
+            }),
+          });
+          
+          if (syncResponse.ok) {
+            const syncResult = await syncResponse.json();
+            console.log(`[import-kb] HS sync complete: ${syncResult.updates_applied}/${syncResult.updates_found} updates applied`);
+          } else {
+            console.error(`[import-kb] HS sync failed: ${syncResponse.status}`);
+          }
+        } catch (e) {
+          console.error("[import-kb] HS sync error:", e);
+        }
+      };
+      
+      // Utiliser EdgeRuntime.waitUntil pour exécuter en background
+      // @ts-ignore - EdgeRuntime est disponible dans Deno Deploy
+      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+        // @ts-ignore
+        EdgeRuntime.waitUntil(syncTask());
+      } else {
+        // Fallback: exécuter sans attendre
+        syncTask();
+      }
+    }
 
     console.log(`Import complete: ${totalChunks} chunks, ${importResult.errors.length} errors, ${allAmbiguities.length} ambiguities`);
 

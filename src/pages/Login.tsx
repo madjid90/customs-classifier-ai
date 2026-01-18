@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { Loader2, Shield, ArrowLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useProtectedNavigation } from "@/hooks/useProtectedNavigation";
 import { PhoneInput } from "@/components/auth/PhoneInput";
 import { OtpInput } from "@/components/auth/OtpInput";
 
@@ -23,15 +23,15 @@ export default function LoginPage() {
   const [countdown, setCountdown] = useState(0);
   
   const { sendOtpCode, verifyOtpCode, isAuthenticated } = useAuth();
-  const navigate = useNavigate();
+  const { redirectAfterLogin } = useProtectedNavigation();
   const { toast } = useToast();
 
   // Redirect if already authenticated
   useEffect(() => {
     if (isAuthenticated) {
-      navigate("/dashboard", { replace: true });
+      redirectAfterLogin();
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, redirectAfterLogin]);
 
   // Countdown for resend
   useEffect(() => {
@@ -117,7 +117,7 @@ export default function LoginPage() {
         title: "Connexion reussie",
         description: "Bienvenue sur la plateforme de classification douaniere.",
       });
-      navigate("/dashboard");
+      redirectAfterLogin();
     } finally {
       setIsLoading(false);
     }

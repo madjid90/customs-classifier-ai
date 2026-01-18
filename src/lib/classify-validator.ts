@@ -15,6 +15,7 @@
  */
 
 import { HSResult, ClassifyStatus, EvidenceItem, Alternative, NextQuestion } from "./types";
+import { logger } from "./logger";
 
 export interface ValidationResult {
   valid: boolean;
@@ -344,7 +345,7 @@ export function canDisplayResult(result: HSResult | null): boolean {
   
   // CRITICAL: Never display code without evidence
   if (!result.evidence || result.evidence.length === 0) {
-    console.warn("[ANTI-HALLUCINATION] Tentative d'affichage sans preuves bloquée");
+    logger.warn("[ANTI-HALLUCINATION] Tentative d'affichage sans preuves bloquée");
     return false;
   }
   

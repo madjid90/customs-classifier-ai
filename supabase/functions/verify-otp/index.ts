@@ -1,7 +1,7 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SignJWT } from "https://deno.land/x/jose@v4.14.4/index.ts";
 import { logger } from "../_shared/logger.ts";
 import { corsHeaders } from "../_shared/cors.ts";
+import { createServiceClient, getUserRole } from "../_shared/auth.ts";
 
 // Normalize phone to E.164 format
 function normalizePhone(phone: string): string {
@@ -35,9 +35,7 @@ Deno.serve(async (req) => {
     const normalizedPhone = normalizePhone(phone);
     logger.info(`[verify-otp] Verifying OTP for phone: ${normalizedPhone}`);
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const supabase = createServiceClient();
 
     // Get the latest OTP for this phone
     const { data: otpRecord, error: fetchError } = await supabase
@@ -172,14 +170,8 @@ Deno.serve(async (req) => {
       companyId = profile.company_id;
     }
 
-    // Get user role
-    const { data: roleData } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", userId)
-      .single();
-
-    const userRole = roleData?.role || "agent";
+    // Get user role using centralized auth module
+    const userRole = await getUserRole(userId);
 
     // Generate JWT token
     const jwtSecret = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;

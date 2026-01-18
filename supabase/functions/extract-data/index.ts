@@ -5,6 +5,25 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// ============================================================================
+// CONFIGURATION - Modèles OpenAI depuis les secrets
+// ============================================================================
+
+function getOpenAIConfig() {
+  const apiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY non configurée");
+  }
+  return {
+    apiKey,
+    modelReasoning: Deno.env.get("OPENAI_MODEL_REASONING") || "gpt-4.1",
+  };
+}
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
 interface ExtractionRequest {
   type: "hs_codes" | "dum_records" | "kb_chunks";
   content: string;
@@ -39,6 +58,10 @@ interface KBChunkExtracted {
   summary?: string;
   keywords?: string[];
 }
+
+// ============================================================================
+// SYSTEM PROMPTS
+// ============================================================================
 
 const SYSTEM_PROMPTS = {
   hs_codes: `Tu es un expert en nomenclature douanière. Extrait les codes HS et leurs libellés depuis le texte fourni.
@@ -76,20 +99,23 @@ RETOURNE un tableau JSON avec la structure:
 [{"doc_id": "doc_001", "ref": "Art. 1", "text": "...", "summary": "...", "keywords": ["douane", "import"]}]`
 };
 
-async function callLovableAI(systemPrompt: string, userContent: string): Promise<string> {
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY) {
-    throw new Error("LOVABLE_API_KEY non configurée");
-  }
+// ============================================================================
+// OPENAI API CALL (Backend only - No frontend AI)
+// ============================================================================
 
-  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+async function callOpenAI(systemPrompt: string, userContent: string): Promise<string> {
+  const config = getOpenAIConfig();
+
+  console.log(`[extract-data] Calling OpenAI ${config.modelReasoning}...`);
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+      "Authorization": `Bearer ${config.apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
+      model: config.modelReasoning,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent }
@@ -122,15 +148,19 @@ async function callLovableAI(systemPrompt: string, userContent: string): Promise
   });
 
   if (!response.ok) {
-    if (response.status === 429) {
-      throw new Error("Limite de requêtes dépassée. Réessayez plus tard.");
-    }
-    if (response.status === 402) {
-      throw new Error("Crédits insuffisants. Rechargez votre compte Lovable AI.");
-    }
     const errorText = await response.text();
-    console.error("[extract-data] AI Gateway error:", response.status, errorText);
-    throw new Error(`Erreur AI Gateway: ${response.status}`);
+    console.error("[extract-data] OpenAI error:", response.status, errorText);
+    
+    if (response.status === 429) {
+      throw new Error("Limite de requêtes OpenAI dépassée. Réessayez plus tard.");
+    }
+    if (response.status === 401) {
+      throw new Error("Clé API OpenAI invalide.");
+    }
+    if (response.status === 402 || response.status === 403) {
+      throw new Error("Quota OpenAI épuisé ou accès refusé.");
+    }
+    throw new Error(`Erreur OpenAI: ${response.status}`);
   }
 
   const data = await response.json();
@@ -144,6 +174,10 @@ async function callLovableAI(systemPrompt: string, userContent: string): Promise
   // Fallback to content
   return data.choices?.[0]?.message?.content || "[]";
 }
+
+// ============================================================================
+// PARSING & NORMALIZATION
+// ============================================================================
 
 function parseAIResponse<T>(response: string): T[] {
   try {
@@ -193,6 +227,10 @@ function normalizeDate(dateStr: string): string | null {
   
   return null;
 }
+
+// ============================================================================
+// MAIN HANDLER
+// ============================================================================
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -284,7 +322,7 @@ Deno.serve(async (req) => {
       try {
         console.log(`[extract-data] Processing chunk ${i + 1}/${contentChunks.length}`);
         
-        const aiResponse = await callLovableAI(systemPrompt, contentChunks[i]);
+        const aiResponse = await callOpenAI(systemPrompt, contentChunks[i]);
         const chunkResults = parseAIResponse(aiResponse);
         
         console.log(`[extract-data] Chunk ${i + 1} extracted ${chunkResults.length} items`);

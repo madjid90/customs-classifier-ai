@@ -188,6 +188,95 @@ export const PresignRequestSchema = z.object({
 });
 
 // ============================================================================
+// ADMIN SCHEMAS
+// ============================================================================
+
+/**
+ * Ingestion source enum
+ */
+export const IngestionSourceSchema = z.enum(["omd", "maroc", "lois", "dum"], {
+  errorMap: () => ({ message: "Source doit être 'omd', 'maroc', 'lois' ou 'dum'" }),
+});
+
+/**
+ * Ingestion status enum
+ */
+export const IngestionStatusSchema = z.enum([
+  "NEW", "EXTRACTING", "PARSING", "INDEXING", "DONE", "ERROR", "DISABLED"
+]);
+
+/**
+ * Ingestion list query params schema
+ */
+export const IngestionListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+  status: IngestionStatusSchema.optional(),
+  source: IngestionSourceSchema.optional(),
+});
+
+/**
+ * Ingestion register schema
+ */
+export const IngestionRegisterSchema = z.object({
+  source: IngestionSourceSchema,
+  version_label: z.string().trim().min(1, "Version requise").max(50, "Version trop longue"),
+  file_url: z.string().url("URL de fichier invalide"),
+  filename: z.string().trim().max(255).optional(),
+});
+
+/**
+ * ETL run schema
+ */
+export const EtlRunSchema = z.object({
+  ingestion_id: UUIDSchema,
+});
+
+/**
+ * KB search query params schema
+ */
+export const KBSearchQuerySchema = z.object({
+  q: z.string().trim().min(1, "Requête de recherche requise").max(500, "Requête trop longue"),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  source: IngestionSourceSchema.optional(),
+});
+
+// ============================================================================
+// EXPORT-PDF SCHEMAS
+// ============================================================================
+
+/**
+ * Export PDF request schema
+ */
+export const ExportPdfRequestSchema = z.object({
+  case_id: UUIDSchema,
+});
+
+// ============================================================================
+// EXTRACT-DATA SCHEMAS
+// ============================================================================
+
+/**
+ * Extraction type enum
+ */
+export const ExtractionTypeSchema = z.enum(["hs_codes", "dum_records", "kb_chunks"], {
+  errorMap: () => ({ message: "Type doit être 'hs_codes', 'dum_records' ou 'kb_chunks'" }),
+});
+
+/**
+ * Extract data request schema
+ */
+export const ExtractDataRequestSchema = z.object({
+  type: ExtractionTypeSchema,
+  content: z.string().trim().min(10, "Contenu trop court").max(500000, "Contenu trop long (max 500KB)"),
+  options: z.object({
+    version_label: z.string().trim().max(50).optional(),
+    chunk_size: z.number().int().min(100).max(50000).optional(),
+    language: z.enum(["fr", "ar", "en"]).optional(),
+  }).optional(),
+});
+
+// ============================================================================
 // VALIDATION RESULT TYPE
 // ============================================================================
 

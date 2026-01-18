@@ -4,6 +4,12 @@ import {
   authenticateRequest, 
   createServiceClient
 } from "../_shared/auth.ts";
+import {
+  validateRequestBody,
+  validatePathParam,
+  ExportPdfRequestSchema,
+  UUIDSchema,
+} from "../_shared/validation.ts";
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -30,22 +36,25 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Extract case_id from URL path: /export-pdf or from body
+    // Extract case_id from URL path or body
     const url = new URL(req.url);
     const pathParts = url.pathname.split("/").filter(Boolean);
     let caseId = pathParts.length > 1 ? pathParts[pathParts.length - 1] : null;
     
-    // If not in path, try body
+    // If not in path, try body with Zod validation
     if (!caseId || caseId === "export-pdf") {
-      const body = await req.json().catch(() => ({}));
-      caseId = body.case_id;
-    }
-
-    if (!caseId) {
-      return new Response(
-        JSON.stringify({ error: "case_id is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      const validation = await validateRequestBody(req, ExportPdfRequestSchema, corsHeaders);
+      if (!validation.success) {
+        return validation.error;
+      }
+      caseId = validation.data.case_id;
+    } else {
+      // Validate path param with Zod
+      const pathValidation = validatePathParam(caseId, "case_id", UUIDSchema, corsHeaders);
+      if (!pathValidation.success) {
+        return pathValidation.error;
+      }
+      caseId = pathValidation.data;
     }
 
     logger.info(`Generating PDF for case: ${caseId}`);

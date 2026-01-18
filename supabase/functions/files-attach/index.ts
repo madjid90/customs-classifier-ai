@@ -1,7 +1,11 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders } from "../_shared/cors.ts";
+import { getCorsHeaders } from "../_shared/cors.ts";
+import { 
+  authenticateRequest, 
+  createServiceClient,
+  type UserProfile
+} from "../_shared/auth.ts";
 
 // ============================================================================
 // INPUT VALIDATION (Zod)
@@ -20,36 +24,22 @@ const AttachFileSchema = z.object({
 type AttachFileRequest = z.infer<typeof AttachFileSchema>;
 
 Deno.serve(async (req) => {
+  const corsHeaders = getCorsHeaders(req);
+  
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Get auth token
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Authorization required" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Authenticate user using centralized auth
+    const authResult = await authenticateRequest(req);
+    if (!authResult.success) {
+      return authResult.error;
     }
-
-    // Verify JWT and get user
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
-    if (authError || !user) {
-      console.error("Auth error:", authError);
-      return new Response(
-        JSON.stringify({ error: "Invalid token" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const { user, profile } = authResult.data;
+    const supabase = createServiceClient();
 
     if (req.method !== "POST") {
       return new Response(
@@ -70,22 +60,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`Attaching file to case: ${caseId} for user: ${user.id}`);
-
-    // Get user's company
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("company_id")
-      .eq("user_id", user.id)
-      .single();
-
-    if (profileError || !profile) {
-      console.error("Profile error:", profileError);
-      return new Response(
-        JSON.stringify({ error: "User profile not found" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    logger.info(`Attaching file to case: ${caseId} for user: ${user.id}`);
 
     // Verify case exists and belongs to user's company
     const { data: caseData, error: caseError } = await supabase
@@ -96,7 +71,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (caseError || !caseData) {
-      console.error("Case error:", caseError);
+      logger.error("Case error:", caseError);
       return new Response(
         JSON.stringify({ error: "Case not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -137,6 +112,7 @@ Deno.serve(async (req) => {
     }
     
     const { file_type, file_url, filename, size_bytes } = validation.data;
+    
     // Insert file record
     const { data: fileRecord, error: insertError } = await supabase
       .from("case_files")
@@ -151,7 +127,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (insertError) {
-      console.error("Insert error:", insertError);
+      logger.error("Insert error:", insertError);
       return new Response(
         JSON.stringify({ error: "Failed to attach file" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -162,7 +138,7 @@ Deno.serve(async (req) => {
     await supabase.from("audit_logs").insert({
       case_id: caseId,
       user_id: user.id,
-      user_phone: user.phone || "unknown",
+      user_phone: profile.phone,
       action: "FILE_UPLOADED",
       meta: {
         file_id: fileRecord.id,
@@ -172,7 +148,7 @@ Deno.serve(async (req) => {
       },
     });
 
-    console.log(`File attached successfully: ${fileRecord.id}`);
+    logger.info(`File attached successfully: ${fileRecord.id}`);
 
     return new Response(
       JSON.stringify({
@@ -191,11 +167,11 @@ Deno.serve(async (req) => {
     );
 
   } catch (err) {
-    console.error("Files attach error:", err);
+    logger.error("Files attach error:", err);
     const errorMessage = err instanceof Error ? err.message : "Internal server error";
     return new Response(
       JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...getCorsHeaders(req), "Content-Type": "application/json" } }
     );
   }
 });

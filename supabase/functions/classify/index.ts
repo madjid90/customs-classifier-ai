@@ -197,13 +197,22 @@ async function callLovableAI(
     else confidenceLevel = "low";
   }
 
+  // Normalize confidence to 0-1 range (OpenAPI standard)
+  const rawConfidence = parsed.confidence ?? null;
+  const normalizedConfidence = rawConfidence !== null 
+    ? (rawConfidence > 1 ? rawConfidence / 100 : rawConfidence) 
+    : null;
+
   return {
     status: parsed.status || "ERROR",
     recommended_code: parsed.recommended_code || null,
-    confidence: parsed.confidence ?? null,
+    confidence: normalizedConfidence,
     confidence_level: confidenceLevel,
     justification_short: parsed.justification_short || null,
-    alternatives: parsed.alternatives || [],
+    alternatives: (parsed.alternatives || []).map((alt: any) => ({
+      ...alt,
+      confidence: alt.confidence > 1 ? alt.confidence / 100 : alt.confidence,
+    })),
     evidence: parsed.evidence || [],
     next_question: parsed.next_question || null,
     error_message: parsed.error_message || null,

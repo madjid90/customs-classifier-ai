@@ -214,7 +214,12 @@ export default function AnalyzeCasePage() {
       // NEED_INFO is handled by displaying the question
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erreur lors de l'analyse";
-      setError(message);
+      // Handle timeout specifically
+      if (message.includes("timeout") || message.includes("ETIMEDOUT") || message.includes("Network Error")) {
+        setError("Délai d'analyse dépassé. Le serveur met trop de temps à répondre. Veuillez réessayer.");
+      } else {
+        setError(message);
+      }
       toast({
         title: "Erreur",
         description: message,
@@ -435,6 +440,19 @@ export default function AnalyzeCasePage() {
                 onAnswer={handleAnswer}
                 isSubmitting={isAnalyzing}
               />
+            )}
+
+            {/* R3: NEED_INFO without question - show guidance */}
+            {lastResult?.status === "NEED_INFO" && !lastResult.next_question && (
+              <Card className="border-warning/50 bg-warning/5">
+                <CardContent className="py-6 text-center">
+                  <AlertCircle className="h-8 w-8 text-warning mx-auto mb-2" />
+                  <p className="font-medium text-warning">Informations insuffisantes</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Veuillez ajouter des documents supplémentaires pour permettre la classification.
+                  </p>
+                </CardContent>
+              </Card>
             )}
 
             {/* File Upload */}

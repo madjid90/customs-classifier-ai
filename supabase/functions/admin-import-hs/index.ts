@@ -1,34 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-// ============================================================================
-// CONDITIONAL LOGGER
-// ============================================================================
-
-const IS_PRODUCTION = Deno.env.get("ENVIRONMENT") === "production";
-
-const logger = {
-  debug: (...args: unknown[]) => {
-    if (!IS_PRODUCTION) console.log("[DEBUG]", ...args);
-  },
-  info: (...args: unknown[]) => {
-    console.log("[INFO]", ...args);
-  },
-  warn: (...args: unknown[]) => {
-    console.warn("[WARN]", ...args);
-  },
-  error: (...args: unknown[]) => {
-    console.error("[ERROR]", ...args);
-  },
-  metric: (name: string, value: number, tags?: Record<string, string>) => {
-    console.log(JSON.stringify({
-      type: "metric",
-      name,
-      value,
-      tags,
-      timestamp: new Date().toISOString(),
-    }));
-  },
-};
+import { logger } from "../_shared/logger.ts";
 
 // Domaines autorisés pour CORS
 const ALLOWED_ORIGINS = [

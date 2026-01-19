@@ -1,129 +1,176 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { sendOtp, verifyOtp } from "@/lib/api-client";
+import { supabase } from "@/integrations/supabase/client";
+import type { User, Session } from "@supabase/supabase-js";
 
 type UserRole = "admin" | "agent" | "manager";
 
-interface AuthUser {
+interface UserProfile {
   id: string;
+  user_id: string;
   company_id: string;
-  role: UserRole;
   phone: string;
 }
 
 interface AuthContextType {
-  user: AuthUser | null;
+  user: User | null;
+  session: Session | null;
+  profile: UserProfile | null;
+  role: UserRole;
   isAuthenticated: boolean;
   isLoading: boolean;
-  sendOtpCode: (phone: string) => Promise<{ error: Error | null; expiresIn?: number }>;
+  sendOtpCode: (phone: string) => Promise<{ error: Error | null }>;
   verifyOtpCode: (phone: string, otp: string) => Promise<{ error: Error | null }>;
-  logout: () => void;
+  logout: () => Promise<void>;
   hasRole: (roles: UserRole | UserRole[]) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const AUTH_TOKEN_KEY = "auth_token";
-const AUTH_USER_KEY = "auth_user";
-const AUTH_EXPIRES_KEY = "auth_expires";
-
-function getStoredAuth(): { token: string | null; user: AuthUser | null; expires: string | null } {
-  const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  const userStr = localStorage.getItem(AUTH_USER_KEY);
-  const expires = localStorage.getItem(AUTH_EXPIRES_KEY);
-  
-  let user: AuthUser | null = null;
-  if (userStr) {
-    try {
-      user = JSON.parse(userStr);
-    } catch {
-      user = null;
-    }
-  }
-  
-  return { token, user, expires };
-}
-
-function isTokenExpired(expires: string | null): boolean {
-  if (!expires) return true;
-  return new Date(expires) <= new Date();
-}
-
-function clearAuth() {
-  localStorage.removeItem(AUTH_TOKEN_KEY);
-  localStorage.removeItem(AUTH_USER_KEY);
-  localStorage.removeItem(AUTH_EXPIRES_KEY);
-}
-
-function storeAuth(token: string, user: AuthUser, expiresAt: string) {
-  localStorage.setItem(AUTH_TOKEN_KEY, token);
-  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-  localStorage.setItem(AUTH_EXPIRES_KEY, expiresAt);
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [role, setRole] = useState<UserRole>("agent");
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    // Check for existing valid session
-    const { token, user: storedUser, expires } = getStoredAuth();
-    
-    if (token && storedUser && !isTokenExpired(expires)) {
-      setUser(storedUser);
-    } else if (token) {
-      // Token expired, clear it
-      clearAuth();
+  // Fetch user profile and role
+  const fetchUserData = useCallback(async (userId: string) => {
+    try {
+      // Fetch profile
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+
+      if (profileData) {
+        setProfile(profileData as UserProfile);
+      }
+
+      // Fetch role
+      const { data: roleData } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", userId)
+        .single();
+
+      if (roleData?.role) {
+        setRole(roleData.role as UserRole);
+      } else {
+        setRole("agent");
+      }
+    } catch (error) {
+      console.error("Error fetching user data:", error);
     }
-    
-    setIsLoading(false);
   }, []);
 
+  useEffect(() => {
+    // Set up auth state listener FIRST
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, newSession) => {
+        setSession(newSession);
+        setUser(newSession?.user ?? null);
+
+        // Defer Supabase calls with setTimeout to prevent deadlock
+        if (newSession?.user) {
+          setTimeout(() => {
+            fetchUserData(newSession.user.id);
+          }, 0);
+        } else {
+          setProfile(null);
+          setRole("agent");
+        }
+      }
+    );
+
+    // THEN check for existing session
+    supabase.auth.getSession().then(({ data: { session: existingSession } }) => {
+      setSession(existingSession);
+      setUser(existingSession?.user ?? null);
+      
+      if (existingSession?.user) {
+        fetchUserData(existingSession.user.id);
+      }
+      setIsLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, [fetchUserData]);
+
+  // Send OTP via Supabase Auth
   const sendOtpCode = useCallback(async (phone: string) => {
     try {
-      const response = await sendOtp(phone);
-      return { error: null, expiresIn: response.data.expires_in };
-    } catch (error) {
-      return { error: error as Error };
-    }
-  }, []);
+      // Normalize phone number
+      const normalizedPhone = phone.replace(/\s/g, "");
+      
+      const { error } = await supabase.auth.signInWithOtp({
+        phone: normalizedPhone,
+      });
 
-  const verifyOtpCode = useCallback(async (phone: string, otp: string) => {
-    try {
-      const response = await verifyOtp(phone, otp);
-      const { token, expires_at, user: userData } = response.data;
-      
-      const authUser: AuthUser = {
-        id: userData.id,
-        company_id: userData.company_id,
-        role: userData.role as UserRole,
-        phone: userData.phone,
-      };
-      
-      storeAuth(token, authUser, expires_at);
-      setUser(authUser);
-      
+      if (error) {
+        return { error: new Error(error.message) };
+      }
+
       return { error: null };
     } catch (error) {
       return { error: error as Error };
     }
   }, []);
 
-  const logout = useCallback(() => {
-    clearAuth();
+  // Verify OTP via Supabase Auth
+  const verifyOtpCode = useCallback(async (phone: string, otp: string) => {
+    try {
+      const normalizedPhone = phone.replace(/\s/g, "");
+
+      const { data, error } = await supabase.auth.verifyOtp({
+        phone: normalizedPhone,
+        token: otp,
+        type: "sms",
+      });
+
+      if (error) {
+        return { error: new Error(error.message) };
+      }
+
+      // Session is automatically set by Supabase Auth
+      if (data.session) {
+        setSession(data.session);
+        setUser(data.user);
+        
+        // Fetch profile and role
+        if (data.user) {
+          await fetchUserData(data.user.id);
+        }
+      }
+
+      return { error: null };
+    } catch (error) {
+      return { error: error as Error };
+    }
+  }, [fetchUserData]);
+
+  const logout = useCallback(async () => {
+    await supabase.auth.signOut();
     setUser(null);
+    setSession(null);
+    setProfile(null);
+    setRole("agent");
   }, []);
 
   const hasRole = useCallback((roles: UserRole | UserRole[]) => {
     if (!user) return false;
     const roleArray = Array.isArray(roles) ? roles : [roles];
-    return roleArray.includes(user.role);
-  }, [user]);
+    return roleArray.includes(role);
+  }, [user, role]);
 
   return (
     <AuthContext.Provider
       value={{
         user,
-        isAuthenticated: !!user,
+        session,
+        profile,
+        role,
+        isAuthenticated: !!user && !!session,
         isLoading,
         sendOtpCode,
         verifyOtpCode,

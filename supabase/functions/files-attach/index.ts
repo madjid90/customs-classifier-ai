@@ -24,6 +24,7 @@ const AttachFileSchema = z.object({
   file_url: z.string().url("L'URL du fichier doit être valide"),
   filename: z.string().min(1, "Le nom du fichier est requis").max(255, "Le nom du fichier ne peut pas dépasser 255 caractères"),
   size_bytes: z.number().int().min(0).max(50_000_000, "La taille du fichier ne peut pas dépasser 50MB"),
+  storage_path: z.string().optional(),
 });
 
 type AttachFileRequest = z.infer<typeof AttachFileSchema>;
@@ -116,7 +117,7 @@ Deno.serve(async (req) => {
       );
     }
     
-    const { file_type, file_url, filename, size_bytes } = validation.data;
+    const { file_type, file_url, filename, size_bytes, storage_path } = validation.data;
     
     // Insert file record
     const { data: fileRecord, error: insertError } = await supabase
@@ -127,6 +128,7 @@ Deno.serve(async (req) => {
         file_url,
         filename,
         size_bytes,
+        storage_path: storage_path || null,
       })
       .select()
       .single();

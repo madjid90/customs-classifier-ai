@@ -27,6 +27,7 @@ export function getCorsHeaders(req: Request): Record<string, string> {
   
   const isAllowed = ALLOWED_ORIGINS.some(allowed => origin === allowed) || 
     origin.endsWith(".lovable.app") || 
+    origin.endsWith(".lovableproject.com") ||
     origin.includes("localhost");
   
   return {

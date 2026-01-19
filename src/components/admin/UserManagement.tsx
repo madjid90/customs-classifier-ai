@@ -22,7 +22,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Users, Shield, UserPlus, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Users, Shield, UserPlus, Loader2, RefreshCw, Trash2, Send, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { UserRole } from "@/lib/types";
@@ -57,7 +57,8 @@ export function UserManagement() {
   // New user form
   const [newPhone, setNewPhone] = useState("");
   const [newRole, setNewRole] = useState<UserRole>("agent");
-  const [isAdding, setIsAdding] = useState(false);
+  const [isInviting, setIsInviting] = useState(false);
+  const [inviteSuccess, setInviteSuccess] = useState(false);
 
   useEffect(() => {
     fetchUsers();
@@ -169,27 +170,64 @@ export function UserManagement() {
     }
   }
 
-  async function handleAddUser(e: React.FormEvent) {
+  async function handleInviteUser(e: React.FormEvent) {
     e.preventDefault();
     if (!newPhone) return;
 
-    setIsAdding(true);
-    try {
-      // Note: In a real app, you'd need to create the user via auth first
-      // For now, we'll just show a message about the flow
+    // Validate phone format
+    const phoneRegex = /^\+[1-9]\d{9,14}$/;
+    const cleanPhone = newPhone.replace(/[\s\-\(\)]/g, "");
+    if (!phoneRegex.test(cleanPhone)) {
       toast({
-        title: "Information",
-        description: "L'utilisateur doit d'abord se connecter via OTP pour créer son compte.",
+        title: "Format invalide",
+        description: "Utilisez le format international: +33... ou +212...",
+        variant: "destructive",
       });
+      return;
+    }
+
+    setIsInviting(true);
+    setInviteSuccess(false);
+    
+    try {
+      const { data, error } = await supabase.functions.invoke("send-invite", {
+        body: {
+          phone: cleanPhone,
+          role: newRole,
+        },
+      });
+
+      if (error) throw error;
+
+      if (data.already_exists) {
+        toast({
+          title: "Rôle mis à jour",
+          description: `L'utilisateur existe déjà. Son rôle a été mis à jour en ${ROLE_LABELS[newRole]}.`,
+        });
+      } else {
+        toast({
+          title: "Invitation envoyée",
+          description: `SMS d'invitation envoyé à ${newPhone}`,
+        });
+      }
+
+      setInviteSuccess(true);
       setNewPhone("");
+      
+      // Refresh users list
+      fetchUsers();
+      
+      // Reset success state after 3s
+      setTimeout(() => setInviteSuccess(false), 3000);
     } catch (err) {
+      console.error("Invite error:", err);
       toast({
-        title: "Erreur",
-        description: err instanceof Error ? err.message : "Erreur",
+        title: "Erreur d'envoi",
+        description: err instanceof Error ? err.message : "Impossible d'envoyer l'invitation",
         variant: "destructive",
       });
     } finally {
-      setIsAdding(false);
+      setIsInviting(false);
     }
   }
 
@@ -348,7 +386,7 @@ export function UserManagement() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleAddUser} className="flex gap-4">
+          <form onSubmit={handleInviteUser} className="flex gap-4 items-center">
             <Input
               placeholder="+33 ou +212..."
               value={newPhone}
@@ -365,13 +403,15 @@ export function UserManagement() {
                 <SelectItem value="admin">Admin</SelectItem>
               </SelectContent>
             </Select>
-            <Button type="submit" disabled={isAdding || !newPhone}>
-              {isAdding ? (
+            <Button type="submit" disabled={isInviting || !newPhone}>
+              {isInviting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : inviteSuccess ? (
+                <CheckCircle className="mr-2 h-4 w-4 text-success" />
               ) : (
-                <UserPlus className="mr-2 h-4 w-4" />
+                <Send className="mr-2 h-4 w-4" />
               )}
-              Inviter
+              {inviteSuccess ? "Envoyé !" : "Envoyer invitation"}
             </Button>
           </form>
         </CardContent>

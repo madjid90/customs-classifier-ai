@@ -78,3 +78,6 @@ verify_jwt = false
 
 [functions.sync-hs-from-laws]
 verify_jwt = false
+
+[functions.send-invite]
+verify_jwt = false

@@ -460,8 +460,71 @@ export default function ResultPage() {
                   </div>
                 )}
 
-                {/* Justification */}
-                {result.justification_short && (
+                {/* Justification détaillée */}
+                {result.justification_detailed ? (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="font-medium mb-2 flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-primary" />
+                        Justification IA
+                      </h3>
+                      <p className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
+                        {result.justification_detailed.summary}
+                      </p>
+                    </div>
+
+                    {/* Raisonnement étape par étape */}
+                    {result.justification_detailed.reasoning_steps?.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-medium mb-2">Raisonnement</h4>
+                        <ol className="space-y-2 text-sm">
+                          {result.justification_detailed.reasoning_steps.map((step: string, idx: number) => (
+                            <li key={idx} className="flex gap-2">
+                              <span className="flex-shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-medium">
+                                {idx + 1}
+                              </span>
+                              <span className="text-muted-foreground">{step}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+
+                    {/* Sources citées */}
+                    {result.justification_detailed.sources_cited?.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-medium mb-2">Sources consultées</h4>
+                        <div className="space-y-2">
+                          {result.justification_detailed.sources_cited.map((source: any, idx: number) => (
+                            <div key={idx} className="flex items-start gap-2 text-sm rounded-lg border p-2 bg-muted/30">
+                              <span className="px-2 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent-foreground">
+                                {source.source}
+                              </span>
+                              <div className="flex-1">
+                                <p className="font-medium text-foreground">{source.reference}</p>
+                                <p className="text-xs text-muted-foreground">{source.relevance}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Facteurs clés */}
+                    {result.justification_detailed.key_factors?.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-medium mb-2">Facteurs déterminants</h4>
+                        <div className="flex flex-wrap gap-2">
+                          {result.justification_detailed.key_factors.map((factor: string, idx: number) => (
+                            <span key={idx} className="px-3 py-1 rounded-full text-xs bg-primary/10 text-primary border border-primary/20">
+                              {factor}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : result.justification_short && (
                   <div>
                     <h3 className="font-medium mb-2">Justification</h3>
                     <p className="text-sm text-muted-foreground">{result.justification_short}</p>

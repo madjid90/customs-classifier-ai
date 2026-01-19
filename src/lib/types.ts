@@ -112,6 +112,22 @@ export interface NextQuestion {
 }
 
 /**
+ * JustificationDetailed - Explication détaillée de la décision IA
+ */
+export interface SourceCited {
+  source: string;
+  reference: string;
+  relevance: string;
+}
+
+export interface JustificationDetailed {
+  summary: string;                    // Explication complète de 3-5 phrases
+  reasoning_steps: string[];          // Étapes du raisonnement
+  sources_cited: SourceCited[];       // Sources consultées avec références
+  key_factors: string[];              // Facteurs déterminants
+}
+
+/**
  * HSResult - ANTI-HALLUCINATION RULES:
  * 
  * status=DONE: 
@@ -131,14 +147,15 @@ export interface NextQuestion {
  */
 export interface HSResult {
   status: ClassifyStatus;
-  recommended_code: string | null;  // 10 digits or null
-  confidence: number;               // 0-1
+  recommended_code: string | null;              // 10 digits or null
+  confidence: number;                           // 0-1
   confidence_level: ConfidenceLevel;
-  justification_short: string;      // Max 500 chars
-  alternatives: Alternative[];      // Max 3 items
-  evidence: EvidenceItem[];         // REQUIRED if status=DONE|LOW_CONFIDENCE
+  justification_short: string;                  // Max 500 chars
+  justification_detailed: JustificationDetailed | null;  // Explication détaillée pour l'agent
+  alternatives: Alternative[];                  // Max 3 items
+  evidence: EvidenceItem[];                     // REQUIRED if status=DONE|LOW_CONFIDENCE
   next_question: NextQuestion | null;
-  error_message: string | null;     // REQUIRED if status=ERROR
+  error_message: string | null;                 // REQUIRED if status=ERROR
 }
 
 // Audit Types

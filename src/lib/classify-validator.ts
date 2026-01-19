@@ -322,12 +322,31 @@ function sanitizeResult(data: Record<string, unknown>): HSResult {
     };
   }
 
+  // Normalize justification_detailed
+  let justificationDetailed = null;
+  if (data.justification_detailed && typeof data.justification_detailed === "object") {
+    const jd = data.justification_detailed as Record<string, unknown>;
+    justificationDetailed = {
+      summary: (jd.summary as string) || "",
+      reasoning_steps: Array.isArray(jd.reasoning_steps) ? (jd.reasoning_steps as string[]) : [],
+      sources_cited: Array.isArray(jd.sources_cited) 
+        ? (jd.sources_cited as Record<string, unknown>[]).map((s) => ({
+            source: (s.source as string) || "",
+            reference: (s.reference as string) || "",
+            relevance: (s.relevance as string) || "",
+          }))
+        : [],
+      key_factors: Array.isArray(jd.key_factors) ? (jd.key_factors as string[]) : [],
+    };
+  }
+
   return {
     status,
     recommended_code: status === "NEED_INFO" ? null : (data.recommended_code as string) || null,
     confidence: Number(data.confidence) || 0,
     confidence_level: (data.confidence_level as HSResult["confidence_level"]) || "low",
     justification_short: ((data.justification_short as string) || "").substring(0, 500),
+    justification_detailed: justificationDetailed,
     alternatives,
     evidence,
     next_question: nextQuestion,

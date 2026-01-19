@@ -127,6 +127,16 @@ interface HSResult {
   confidence: number | null;
   confidence_level: "high" | "medium" | "low" | null;
   justification_short: string | null;
+  justification_detailed: {
+    summary: string;
+    reasoning_steps: string[];
+    sources_cited: Array<{
+      source: string;
+      reference: string;
+      relevance: string;
+    }>;
+    key_factors: string[];
+  } | null;
   alternatives: Array<{ code: string; reason: string; confidence: number }>;
   evidence: Evidence[];
   next_question: {
@@ -851,6 +861,7 @@ async function makeControlledDecision(
       confidence: null,
       confidence_level: null,
       justification_short: "Aucun code candidat trouvé. Précisez le produit.",
+      justification_detailed: null,
       alternatives: [],
       evidence: [],
       next_question: {
@@ -892,7 +903,15 @@ Réponds en JSON:
   "status": "DONE" | "NEED_INFO" | "LOW_CONFIDENCE",
   "recommended_code": "code_10 EXACT de candidates[]",
   "confidence": 0-100,
-  "justification_short": "2-3 phrases citant evidence[] avec sources",
+  "justification_short": "2-3 phrases résumant la décision",
+  "justification_detailed": {
+    "summary": "Explication complète de 3-5 phrases expliquant le raisonnement",
+    "reasoning_steps": ["Étape 1: analyse du produit", "Étape 2: recherche dans la base", "Étape 3: sélection du code"],
+    "sources_cited": [
+      {"source": "OMD/MAROC/LOIS/DUM", "reference": "référence exacte de evidence[]", "relevance": "pourquoi cette source est pertinente"}
+    ],
+    "key_factors": ["facteur déterminant 1", "facteur déterminant 2"]
+  },
   "alternatives": [{"code": "...", "reason": "...", "confidence": 0-100}],
   "evidence_used": ["ref1", "ref2"],
   "next_question": null ou {"id": "q_xxx", "label": "Question", "type": "text", "required": true}
@@ -985,12 +1004,34 @@ ${evidence.length > 0
 
   console.log(`Décision: ${parsed.status}, code: ${parsed.recommended_code}, conf: ${confidence}`);
 
+  // Construire justification détaillée
+  const justificationDetailed = parsed.justification_detailed ? {
+    summary: parsed.justification_detailed.summary || parsed.justification_short || "",
+    reasoning_steps: parsed.justification_detailed.reasoning_steps || [],
+    sources_cited: (parsed.justification_detailed.sources_cited || []).map((s: any) => ({
+      source: s.source || "unknown",
+      reference: s.reference || "",
+      relevance: s.relevance || "",
+    })),
+    key_factors: parsed.justification_detailed.key_factors || [],
+  } : {
+    summary: parsed.justification_short || "",
+    reasoning_steps: ["Analyse du produit", "Recherche dans la base de données", "Sélection du code approprié"],
+    sources_cited: evidence.slice(0, 3).map(e => ({
+      source: e.source.toUpperCase(),
+      reference: e.ref,
+      relevance: `Pertinence: ${Math.round(e.similarity * 100)}%`,
+    })),
+    key_factors: ["Classification basée sur les preuves documentaires"],
+  };
+
   return {
     status: parsed.status || "ERROR",
     recommended_code: parsed.recommended_code || null,
     confidence,
     confidence_level: confidenceLevel,
     justification_short: parsed.justification_short || null,
+    justification_detailed: justificationDetailed,
     alternatives: (parsed.alternatives || []).slice(0, 3).map((alt: any) => ({
       code: alt.code,
       reason: alt.reason,
@@ -1233,6 +1274,7 @@ serve(async (req) => {
         confidence: null,
         confidence_level: null,
         justification_short: "Aucun code candidat trouvé dans la nomenclature.",
+        justification_detailed: null,
         alternatives: [],
         evidence: [],
         next_question: {

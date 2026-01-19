@@ -261,6 +261,7 @@ export async function classify(payload: {
       confidence: 0,
       confidence_level: "low",
       justification_short: "",
+      justification_detailed: null,
       alternatives: [],
       evidence: [],
       next_question: null,

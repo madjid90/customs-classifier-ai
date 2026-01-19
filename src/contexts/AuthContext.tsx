@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import type { User, Session } from "@supabase/supabase-js";
 
 type UserRole = "admin" | "agent" | "manager";
 
@@ -11,32 +10,65 @@ interface UserProfile {
   phone: string;
 }
 
+interface CustomUser {
+  id: string;
+  phone: string;
+  company_id: string;
+  role: UserRole;
+}
+
 interface AuthContextType {
-  user: User | null;
-  session: Session | null;
+  user: CustomUser | null;
   profile: UserProfile | null;
   role: UserRole;
+  token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   sendOtpCode: (phone: string) => Promise<{ error: Error | null }>;
   verifyOtpCode: (phone: string, otp: string) => Promise<{ error: Error | null }>;
   logout: () => Promise<void>;
   hasRole: (roles: UserRole | UserRole[]) => boolean;
+  getAuthHeaders: () => Record<string, string>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const AUTH_STORAGE_KEY = "custom_auth_token";
+const USER_STORAGE_KEY = "custom_auth_user";
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<CustomUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [role, setRole] = useState<UserRole>("agent");
   const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch user profile and role
-  const fetchUserData = useCallback(async (userId: string) => {
+  // Load auth state from localStorage on mount
+  useEffect(() => {
+    const storedToken = localStorage.getItem(AUTH_STORAGE_KEY);
+    const storedUser = localStorage.getItem(USER_STORAGE_KEY);
+
+    if (storedToken && storedUser) {
+      try {
+        const parsedUser = JSON.parse(storedUser) as CustomUser;
+        setToken(storedToken);
+        setUser(parsedUser);
+        setRole(parsedUser.role || "agent");
+        
+        // Fetch fresh profile data
+        fetchUserProfile(parsedUser.id);
+      } catch (e) {
+        console.error("Failed to parse stored user:", e);
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+        localStorage.removeItem(USER_STORAGE_KEY);
+      }
+    }
+    setIsLoading(false);
+  }, []);
+
+  // Fetch user profile from DB
+  const fetchUserProfile = async (userId: string) => {
     try {
-      // Fetch profile
       const { data: profileData } = await supabase
         .from("profiles")
         .select("*")
@@ -56,59 +88,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (roleData?.role) {
         setRole(roleData.role as UserRole);
-      } else {
-        setRole("agent");
       }
     } catch (error) {
-      console.error("Error fetching user data:", error);
+      console.error("Error fetching user profile:", error);
     }
-  }, []);
+  };
 
-  useEffect(() => {
-    // Set up auth state listener FIRST
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, newSession) => {
-        setSession(newSession);
-        setUser(newSession?.user ?? null);
+  // Get Supabase functions URL
+  const getFunctionsUrl = () => {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    return `${supabaseUrl}/functions/v1`;
+  };
 
-        // Defer Supabase calls with setTimeout to prevent deadlock
-        if (newSession?.user) {
-          setTimeout(() => {
-            fetchUserData(newSession.user.id);
-          }, 0);
-        } else {
-          setProfile(null);
-          setRole("agent");
-        }
-      }
-    );
-
-    // THEN check for existing session
-    supabase.auth.getSession().then(({ data: { session: existingSession } }) => {
-      setSession(existingSession);
-      setUser(existingSession?.user ?? null);
-      
-      if (existingSession?.user) {
-        fetchUserData(existingSession.user.id);
-      }
-      setIsLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
-  }, [fetchUserData]);
-
-  // Send OTP via Supabase Auth
+  // Send OTP via custom edge function
   const sendOtpCode = useCallback(async (phone: string) => {
     try {
-      // Normalize phone number
       const normalizedPhone = phone.replace(/\s/g, "");
       
-      const { error } = await supabase.auth.signInWithOtp({
-        phone: normalizedPhone,
+      const response = await fetch(`${getFunctionsUrl()}/send-otp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ phone: normalizedPhone }),
       });
 
-      if (error) {
-        return { error: new Error(error.message) };
+      const data = await response.json();
+
+      if (!response.ok) {
+        return { error: new Error(data.error || data.message || "Erreur d'envoi du code") };
       }
 
       return { error: null };
@@ -117,42 +125,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Verify OTP via Supabase Auth
+  // Verify OTP via custom edge function
   const verifyOtpCode = useCallback(async (phone: string, otp: string) => {
     try {
       const normalizedPhone = phone.replace(/\s/g, "");
 
-      const { data, error } = await supabase.auth.verifyOtp({
-        phone: normalizedPhone,
-        token: otp,
-        type: "sms",
+      const response = await fetch(`${getFunctionsUrl()}/verify-otp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ phone: normalizedPhone, otp }),
       });
 
-      if (error) {
-        return { error: new Error(error.message) };
+      const data = await response.json();
+
+      if (!response.ok) {
+        return { error: new Error(data.error || data.message || "Code invalide") };
       }
 
-      // Session is automatically set by Supabase Auth
-      if (data.session) {
-        setSession(data.session);
-        setUser(data.user);
-        
-        // Fetch profile and role
-        if (data.user) {
-          await fetchUserData(data.user.id);
-        }
-      }
+      // Store token and user
+      const { token: authToken, user: userData } = data;
+      
+      localStorage.setItem(AUTH_STORAGE_KEY, authToken);
+      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(userData));
+
+      setToken(authToken);
+      setUser(userData as CustomUser);
+      setRole(userData.role as UserRole);
+
+      // Fetch profile
+      await fetchUserProfile(userData.id);
 
       return { error: null };
     } catch (error) {
       return { error: error as Error };
     }
-  }, [fetchUserData]);
+  }, []);
 
   const logout = useCallback(async () => {
-    await supabase.auth.signOut();
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    localStorage.removeItem(USER_STORAGE_KEY);
     setUser(null);
-    setSession(null);
+    setToken(null);
     setProfile(null);
     setRole("agent");
   }, []);
@@ -163,19 +178,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return roleArray.includes(role);
   }, [user, role]);
 
+  // Get authorization headers for API calls
+  const getAuthHeaders = useCallback(() => {
+    if (!token) return {};
+    return {
+      Authorization: `Bearer ${token}`,
+    };
+  }, [token]);
+
   return (
     <AuthContext.Provider
       value={{
         user,
-        session,
         profile,
         role,
-        isAuthenticated: !!user && !!session,
+        token,
+        isAuthenticated: !!user && !!token,
         isLoading,
         sendOtpCode,
         verifyOtpCode,
         logout,
         hasRole,
+        getAuthHeaders,
       }}
     >
       {children}

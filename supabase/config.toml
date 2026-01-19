@@ -9,23 +9,31 @@ max_rows = 1000
 
 [db]
 port = 54322
+shadow_port = 54320
 major_version = 15
 
 [studio]
 enabled = true
 port = 54323
+api_url = "http://localhost"
 
 [auth]
 enabled = true
-site_url = "https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app"
-additional_redirect_urls = ["https://id-preview--0f81d8ea-a57f-480b-a034-90dd63cc6ea0.lovable.app"]
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["https://localhost:3000"]
 jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
 enable_signup = true
 enable_anonymous_sign_ins = false
 
 [auth.email]
 enable_signup = true
-double_confirm_changes = false
+double_confirm_changes = true
+enable_confirmations = false
+
+[auth.sms]
+enable_signup = true
 enable_confirmations = false
 
 [functions.send-otp]
@@ -34,10 +42,13 @@ verify_jwt = false
 [functions.verify-otp]
 verify_jwt = false
 
+[functions.cases]
+verify_jwt = false
+
 [functions.classify]
 verify_jwt = false
 
-[functions.cases]
+[functions.extract-data]
 verify_jwt = false
 
 [functions.files-presign]
@@ -46,31 +57,40 @@ verify_jwt = false
 [functions.files-attach]
 verify_jwt = false
 
-[functions.export-pdf]
-verify_jwt = false
-
 [functions.admin]
 verify_jwt = false
 
 [functions.admin-import-hs]
 verify_jwt = false
 
-[functions.import-dum]
-verify_jwt = false
-
 [functions.import-kb]
 verify_jwt = false
 
-[functions.extract-data]
+[functions.import-dum]
 verify_jwt = false
 
-[functions.generate-synthetic-data]
+[functions.sync-hs-from-laws]
 verify_jwt = false
 
 [functions.generate-embeddings]
 verify_jwt = false
 
+[functions.export-pdf]
+verify_jwt = false
+
+[functions.log-security-event]
+verify_jwt = false
+
 [functions.enrich-hs-codes]
+verify_jwt = false
+
+[functions.generate-synthetic-data]
+verify_jwt = false
+
+[functions.send-invite]
+verify_jwt = false
+
+[functions.analyze-file]
 verify_jwt = false
 
 [functions.log-security-event]

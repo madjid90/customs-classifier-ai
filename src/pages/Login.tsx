@@ -48,7 +48,7 @@ export default function LoginPage() {
       return false;
     }
     if (!PHONE_REGEX.test(cleaned)) {
-      setPhoneError("Format invalide. Utilisez +212XXXXXXXXX");
+      setPhoneError("Format invalide. Utilisez +33 ou +212 suivi du numéro");
       return false;
     }
     setPhoneError("");
@@ -188,7 +188,7 @@ export default function LoginPage() {
                   error={phoneError}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Format: +212 6XX XX XX XX
+                  Format: +33 6XX XX XX XX ou +212 6XX XX XX XX
                 </p>
               </div>
               <Button type="submit" className="w-full" disabled={isLoading}>

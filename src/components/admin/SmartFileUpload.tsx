@@ -12,88 +12,166 @@ import {
   AlertCircle,
   Sparkles,
   X,
-  Play
+  Play,
+  FileImage,
+  FileSpreadsheet,
+  File,
+  Database
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { IngestionSource, INGESTION_SOURCE_LABELS } from "@/lib/types";
 
 interface DetectedFile {
   id: string;
   file: File;
-  detectedType: IngestionSource | null;
+  detectedType: string | null;
+  targetDatabase: string | null;
   confidence: number;
   status: "pending" | "detecting" | "ready" | "uploading" | "processing" | "done" | "error";
   error?: string;
   progress: number;
+  recordsCreated?: number;
 }
 
-const SOURCE_PATTERNS: Record<IngestionSource, RegExp[]> = {
-  omd: [/omd|sh\s*\d|harmonized|système harmonisé|nomenclature/i],
-  maroc: [/maroc|douane|tarif|nomenclature.*maroc/i],
-  lois: [/loi|dahir|décret|circulaire|finance|fiscale?/i],
-  dum: [/dum|déclaration|unique|marchandise|import.*export/i],
+const DATABASE_LABELS: Record<string, string> = {
+  hs_codes: "Codes HS",
+  kb_chunks_omd: "Notes OMD",
+  kb_chunks_maroc: "Réglementation Maroc",
+  kb_chunks_lois: "Lois de finances",
+  dum_records: "Historique DUM",
+  finance_law_articles: "Articles de lois",
+  kb_chunks: "Base de connaissances",
 };
 
-function detectFileType(filename: string, content?: string): { type: IngestionSource | null; confidence: number } {
-  const text = `${filename} ${content || ""}`.toLowerCase();
-  
-  for (const [source, patterns] of Object.entries(SOURCE_PATTERNS)) {
-    for (const pattern of patterns) {
-      if (pattern.test(text)) {
-        return { type: source as IngestionSource, confidence: 0.85 };
-      }
-    }
-  }
-  
-  // Default detection by file extension patterns
-  if (/nomenclature|tarif|code/i.test(filename)) {
-    return { type: "maroc", confidence: 0.6 };
-  }
-  
-  return { type: null, confidence: 0 };
-}
+const getFileIcon = (filename: string) => {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext || '')) return FileImage;
+  if (['xls', 'xlsx', 'csv'].includes(ext || '')) return FileSpreadsheet;
+  if (ext === 'pdf') return FileText;
+  return File;
+};
 
 export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () => void }) {
   const { toast } = useToast();
   const [files, setFiles] = useState<DetectedFile[]>([]);
   const [isProcessingAll, setIsProcessingAll] = useState(false);
 
+  const analyzeFileWithAI = async (file: File): Promise<{ type: string; database: string; confidence: number }> => {
+    try {
+      // Read file content
+      const text = await readFileContent(file);
+      
+      const { data: session } = await supabase.auth.getSession();
+      if (!session?.session?.access_token) {
+        throw new Error("Non authentifié");
+      }
+
+      // Call AI analysis
+      const response = await supabase.functions.invoke("analyze-file", {
+        body: {
+          action: "analyze",
+          content: text.slice(0, 10000), // Send first 10KB for analysis
+          filename: file.name,
+        },
+      });
+
+      if (response.error) throw response.error;
+
+      return {
+        type: response.data.detectedType || "Document",
+        database: response.data.targetDatabase || "kb_chunks",
+        confidence: response.data.confidence || 0.5,
+      };
+    } catch (e) {
+      console.error("AI analysis failed:", e);
+      // Fallback to basic detection
+      return basicDetection(file.name);
+    }
+  };
+
+  const basicDetection = (filename: string): { type: string; database: string; confidence: number } => {
+    const lower = filename.toLowerCase();
+    
+    if (/sh|harmonised|tarif|nomenclature/i.test(lower)) {
+      return { type: "Nomenclature HS", database: "hs_codes", confidence: 0.7 };
+    }
+    if (/omd|wco|explicat/i.test(lower)) {
+      return { type: "Notes OMD", database: "kb_chunks_omd", confidence: 0.7 };
+    }
+    if (/loi|dahir|décret|finance/i.test(lower)) {
+      return { type: "Loi de finances", database: "kb_chunks_lois", confidence: 0.7 };
+    }
+    if (/dum|déclaration|import|export/i.test(lower)) {
+      return { type: "Historique DUM", database: "dum_records", confidence: 0.6 };
+    }
+    if (/maroc|adii|douane/i.test(lower)) {
+      return { type: "Réglementation Maroc", database: "kb_chunks_maroc", confidence: 0.6 };
+    }
+    
+    return { type: "Document", database: "kb_chunks", confidence: 0.5 };
+  };
+
+  const readFileContent = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string || "");
+      reader.onerror = () => reject(new Error("Erreur de lecture"));
+      
+      // For binary files, try to read as text anyway
+      if (file.type.includes("image") || file.type.includes("application/pdf")) {
+        // For PDF/images, we'll rely on filename analysis mainly
+        resolve(`[Fichier binaire: ${file.name}]`);
+      } else {
+        reader.readAsText(file);
+      }
+    });
+  };
+
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const newFiles: DetectedFile[] = acceptedFiles.map((file) => ({
       id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       file,
       detectedType: null,
+      targetDatabase: null,
       confidence: 0,
-      status: "detecting",
+      status: "detecting" as const,
       progress: 0,
     }));
 
     setFiles((prev) => [...prev, ...newFiles]);
 
-    // Detect file types with AI/pattern matching
+    // Analyze each file with AI
     for (const fileItem of newFiles) {
       try {
-        // Read first part of file for detection
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const content = (e.target?.result as string)?.slice(0, 2000) || "";
-          const detected = detectFileType(fileItem.file.name, content);
-          
-          setFiles((prev) =>
-            prev.map((f) =>
-              f.id === fileItem.id
-                ? { ...f, detectedType: detected.type, confidence: detected.confidence, status: "ready" }
-                : f
-            )
-          );
-        };
-        reader.readAsText(fileItem.file.slice(0, 5000));
-      } catch {
+        const analysis = await analyzeFileWithAI(fileItem.file);
+        
         setFiles((prev) =>
           prev.map((f) =>
-            f.id === fileItem.id ? { ...f, status: "ready" } : f
+            f.id === fileItem.id
+              ? { 
+                  ...f, 
+                  detectedType: analysis.type, 
+                  targetDatabase: analysis.database,
+                  confidence: analysis.confidence, 
+                  status: "ready" 
+                }
+              : f
+          )
+        );
+      } catch {
+        const fallback = basicDetection(fileItem.file.name);
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === fileItem.id 
+              ? { 
+                  ...f, 
+                  detectedType: fallback.type,
+                  targetDatabase: fallback.database,
+                  confidence: fallback.confidence,
+                  status: "ready" 
+                } 
+              : f
           )
         );
       }
@@ -104,17 +182,23 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
     setFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
-  const changeFileType = (id: string, type: IngestionSource) => {
+  const changeDatabase = (id: string, database: string) => {
+    const dbInfo = Object.entries(DATABASE_LABELS).find(([key]) => key === database);
     setFiles((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, detectedType: type, confidence: 1 } : f))
+      prev.map((f) => (f.id === id ? { 
+        ...f, 
+        targetDatabase: database, 
+        detectedType: dbInfo?.[1] || "Document",
+        confidence: 1 
+      } : f))
     );
   };
 
   const processFile = async (fileItem: DetectedFile) => {
-    if (!fileItem.detectedType) {
+    if (!fileItem.targetDatabase) {
       toast({
-        title: "Type non détecté",
-        description: "Veuillez sélectionner un type pour ce fichier.",
+        title: "Base cible non définie",
+        description: "Veuillez sélectionner une base de données.",
         variant: "destructive",
       });
       return;
@@ -128,67 +212,36 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
       const { data: session } = await supabase.auth.getSession();
       if (!session?.session?.access_token) throw new Error("Non authentifié");
 
-      // Generate version label from date
-      const versionLabel = new Date().toISOString().split("T")[0];
+      // Read file content
+      const content = await readFileContent(fileItem.file);
 
-      // 1. Get presigned URL
-      const presignRes = await supabase.functions.invoke("files-presign", {
+      setFiles((prev) =>
+        prev.map((f) => (f.id === fileItem.id ? { ...f, progress: 40, status: "processing" } : f))
+      );
+
+      // Process with AI and store
+      const response = await supabase.functions.invoke("analyze-file", {
         body: {
-          case_id: null,
-          file_type: "admin_ingestion",
+          action: "process",
+          content: content,
           filename: fileItem.file.name,
-          content_type: fileItem.file.type || "application/octet-stream",
         },
       });
 
-      if (presignRes.error) throw new Error(presignRes.error.message);
+      if (response.error) throw new Error(response.error.message);
 
       setFiles((prev) =>
-        prev.map((f) => (f.id === fileItem.id ? { ...f, progress: 30 } : f))
-      );
-
-      // 2. Upload file
-      await fetch(presignRes.data.upload_url, {
-        method: "PUT",
-        headers: { "Content-Type": fileItem.file.type || "application/octet-stream" },
-        body: fileItem.file,
-      });
-
-      setFiles((prev) =>
-        prev.map((f) => (f.id === fileItem.id ? { ...f, progress: 60, status: "processing" } : f))
-      );
-
-      // 3. Register and auto-run ingestion
-      const adminRes = await supabase.functions.invoke("admin", {
-        body: {
-          action: "register",
-          source: fileItem.detectedType,
-          version_label: versionLabel,
-          file_url: presignRes.data.file_url,
-        },
-      });
-
-      if (adminRes.error) throw new Error(adminRes.error.message);
-
-      setFiles((prev) =>
-        prev.map((f) => (f.id === fileItem.id ? { ...f, progress: 80 } : f))
-      );
-
-      // 4. Auto-run ETL
-      await supabase.functions.invoke("admin", {
-        body: {
-          action: "etl",
-          ingestion_id: adminRes.data.id,
-        },
-      });
-
-      setFiles((prev) =>
-        prev.map((f) => (f.id === fileItem.id ? { ...f, status: "done", progress: 100 } : f))
+        prev.map((f) => (f.id === fileItem.id ? { 
+          ...f, 
+          status: "done", 
+          progress: 100,
+          recordsCreated: response.data.recordsCreated || 0
+        } : f))
       );
 
       toast({
-        title: "Fichier traité",
-        description: `${fileItem.file.name} importé en tant que ${INGESTION_SOURCE_LABELS[fileItem.detectedType]}`,
+        title: "Fichier traité avec succès",
+        description: `${fileItem.file.name} → ${response.data.recordsCreated || 0} enregistrements créés dans ${DATABASE_LABELS[response.data.targetDatabase] || "la base"}`,
       });
     } catch (err) {
       setFiles((prev) =>
@@ -207,7 +260,7 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
   };
 
   const processAllFiles = async () => {
-    const readyFiles = files.filter((f) => f.status === "ready" && f.detectedType);
+    const readyFiles = files.filter((f) => f.status === "ready" && f.targetDatabase);
     if (readyFiles.length === 0) return;
 
     setIsProcessingAll(true);
@@ -220,18 +273,11 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: {
-      "application/pdf": [".pdf"],
-      "application/vnd.ms-excel": [".xls"],
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-      "text/csv": [".csv"],
-      "application/json": [".json"],
-      "text/plain": [".txt"],
-    },
+    // Accept ALL file types
     maxSize: 50 * 1024 * 1024, // 50MB
   });
 
-  const readyFiles = files.filter((f) => f.status === "ready" && f.detectedType);
+  const readyFiles = files.filter((f) => f.status === "ready" && f.targetDatabase);
 
   return (
     <Card>
@@ -241,11 +287,11 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
           Dépôt intelligent de fichiers
         </CardTitle>
         <CardDescription>
-          Déposez vos fichiers - l'IA détecte automatiquement le type et classe les données
+          L'IA analyse et classe automatiquement vos fichiers dans les bonnes bases de données
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Dropzone */}
+        {/* Dropzone - accepts all files */}
         <div
           {...getRootProps()}
           className={cn(
@@ -263,7 +309,7 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
             <>
               <p className="text-sm font-medium">Glissez-déposez vos fichiers</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                PDF, Excel, CSV, JSON (max 50 Mo)
+                Tous types acceptés - L'IA détecte automatiquement le contenu (max 50 Mo)
               </p>
             </>
           )}
@@ -272,93 +318,111 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
         {/* Files List */}
         {files.length > 0 && (
           <div className="space-y-3">
-            {files.map((file) => (
-              <div
-                key={file.id}
-                className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3"
-              >
-                {file.status === "detecting" && (
-                  <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                )}
-                {file.status === "ready" && (
-                  <Sparkles className="h-5 w-5 text-primary" />
-                )}
-                {file.status === "uploading" && (
-                  <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                )}
-                {file.status === "processing" && (
-                  <Loader2 className="h-5 w-5 animate-spin text-accent" />
-                )}
-                {file.status === "done" && (
-                  <CheckCircle2 className="h-5 w-5 text-success" />
-                )}
-                {file.status === "error" && (
-                  <AlertCircle className="h-5 w-5 text-destructive" />
-                )}
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-muted-foreground" />
-                    <p className="text-sm font-medium truncate">{file.file.name}</p>
-                  </div>
-                  
+            {files.map((file) => {
+              const FileIcon = getFileIcon(file.file.name);
+              
+              return (
+                <div
+                  key={file.id}
+                  className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3"
+                >
                   {file.status === "detecting" && (
-                    <p className="text-xs text-muted-foreground">Détection du type...</p>
+                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                  )}
+                  {file.status === "ready" && (
+                    <Sparkles className="h-5 w-5 text-primary" />
+                  )}
+                  {file.status === "uploading" && (
+                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                  )}
+                  {file.status === "processing" && (
+                    <Loader2 className="h-5 w-5 animate-spin text-accent" />
+                  )}
+                  {file.status === "done" && (
+                    <CheckCircle2 className="h-5 w-5 text-green-500" />
+                  )}
+                  {file.status === "error" && (
+                    <AlertCircle className="h-5 w-5 text-destructive" />
                   )}
 
-                  {file.status === "ready" && file.detectedType && (
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="secondary" className="text-xs">
-                        {INGESTION_SOURCE_LABELS[file.detectedType]}
-                      </Badge>
-                      {file.confidence < 1 && (
-                        <span className="text-xs text-muted-foreground">
-                          ({Math.round(file.confidence * 100)}% confiance)
-                        </span>
-                      )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <FileIcon className="h-4 w-4 text-muted-foreground" />
+                      <p className="text-sm font-medium truncate">{file.file.name}</p>
+                      <span className="text-xs text-muted-foreground">
+                        ({(file.file.size / 1024).toFixed(1)} Ko)
+                      </span>
                     </div>
-                  )}
+                    
+                    {file.status === "detecting" && (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Sparkles className="h-3 w-3" />
+                        Analyse IA en cours...
+                      </p>
+                    )}
 
-                  {file.status === "ready" && !file.detectedType && (
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs text-warning">Type non détecté - sélectionnez:</span>
-                      <div className="flex gap-1">
-                        {(["omd", "maroc", "lois", "dum"] as IngestionSource[]).map((type) => (
-                          <Button
-                            key={type}
-                            variant="outline"
-                            size="sm"
-                            className="h-6 text-xs px-2"
-                            onClick={() => changeFileType(file.id, type)}
-                          >
-                            {INGESTION_SOURCE_LABELS[type]}
-                          </Button>
-                        ))}
+                    {file.status === "ready" && file.targetDatabase && (
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <Badge variant="secondary" className="text-xs flex items-center gap-1">
+                          <Database className="h-3 w-3" />
+                          {DATABASE_LABELS[file.targetDatabase] || file.targetDatabase}
+                        </Badge>
+                        {file.confidence < 1 && (
+                          <span className="text-xs text-muted-foreground">
+                            ({Math.round(file.confidence * 100)}% confiance)
+                          </span>
+                        )}
+                        <span className="text-xs text-muted-foreground">|</span>
+                        <span className="text-xs text-muted-foreground">Changer:</span>
+                        <div className="flex gap-1 flex-wrap">
+                          {Object.entries(DATABASE_LABELS).slice(0, 4).map(([key, label]) => (
+                            <Button
+                              key={key}
+                              variant={file.targetDatabase === key ? "default" : "outline"}
+                              size="sm"
+                              className="h-5 text-xs px-1.5"
+                              onClick={() => changeDatabase(file.id, key)}
+                            >
+                              {label}
+                            </Button>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {(file.status === "uploading" || file.status === "processing") && (
-                    <Progress value={file.progress} className="mt-2 h-1" />
-                  )}
+                    {file.status === "done" && (
+                      <p className="text-xs text-green-600 mt-1">
+                        ✓ {file.recordsCreated} enregistrement(s) créé(s)
+                      </p>
+                    )}
 
-                  {file.error && (
-                    <p className="text-xs text-destructive mt-1">{file.error}</p>
+                    {(file.status === "uploading" || file.status === "processing") && (
+                      <div className="mt-2">
+                        <Progress value={file.progress} className="h-1" />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {file.status === "uploading" ? "Envoi..." : "Traitement IA..."}
+                        </p>
+                      </div>
+                    )}
+
+                    {file.error && (
+                      <p className="text-xs text-destructive mt-1">{file.error}</p>
+                    )}
+                  </div>
+
+                  {file.status === "ready" && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => removeFile(file.id)}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
                   )}
                 </div>
-
-                {file.status === "ready" && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => removeFile(file.id)}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -372,12 +436,12 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
             {isProcessingAll ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Traitement en cours...
+                Traitement IA en cours...
               </>
             ) : (
               <>
                 <Play className="mr-2 h-4 w-4" />
-                Traiter {readyFiles.length} fichier{readyFiles.length > 1 ? "s" : ""}
+                Traiter {readyFiles.length} fichier{readyFiles.length > 1 ? "s" : ""} avec l'IA
               </>
             )}
           </Button>

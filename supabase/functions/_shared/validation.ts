@@ -11,14 +11,14 @@ import { corsHeaders } from "./cors.ts";
 export const UUIDSchema = z.string().uuid("Doit être un UUID valide");
 
 /**
- * Phone schema - validates Moroccan phone format
- * Accepts: +212XXXXXXXXX, 0XXXXXXXXX, 212XXXXXXXXX
+ * Phone schema - validates international phone format
+ * Accepts: +212XXXXXXXXX (Morocco), +33XXXXXXXXX (France), and other E.164 formats
  */
 export const PhoneSchema = z
   .string()
   .min(9, "Numéro trop court")
-  .max(15, "Numéro trop long")
-  .regex(/^(\+?212|0)?[5-7]\d{8}$/, "Format de téléphone invalide");
+  .max(16, "Numéro trop long")
+  .regex(/^(\+?[1-9]\d{8,14}|0[5-7]\d{8})$/, "Format de téléphone invalide");
 
 /**
  * OTP schema - 6-digit code
@@ -410,15 +410,28 @@ export function validatePathParam(
 // ============================================================================
 
 /**
- * Normalizes phone number to E.164 format (Morocco)
+ * Normalizes phone number to E.164 format
+ * Supports Morocco (+212) and France (+33)
  */
 export function normalizePhone(phone: string): string {
+  // Keep the + if present, remove all other non-digits
+  const hasPlus = phone.startsWith("+");
   let cleaned = phone.replace(/\D/g, "");
 
-  if (cleaned.startsWith("0")) {
-    cleaned = "212" + cleaned.slice(1);
+  // Moroccan local format (0X XX XX XX XX)
+  if (cleaned.startsWith("0") && cleaned.length === 10) {
+    const prefix = cleaned.charAt(1);
+    if (prefix === "6" || prefix === "7") {
+      // Could be French mobile (06/07) - keep as-is, user should use + prefix
+      // Default to French for 06/07
+      cleaned = "33" + cleaned.slice(1);
+    } else {
+      // Moroccan format
+      cleaned = "212" + cleaned.slice(1);
+    }
   }
-  if (!cleaned.startsWith("212") && cleaned.length === 9) {
+  // If no country code and 9 digits, assume Morocco
+  if (!cleaned.startsWith("212") && !cleaned.startsWith("33") && cleaned.length === 9) {
     cleaned = "212" + cleaned;
   }
 

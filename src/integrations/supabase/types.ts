@@ -103,6 +103,7 @@ export type Database = {
           filename: string
           id: string
           size_bytes: number
+          storage_path: string | null
         }
         Insert: {
           case_id: string
@@ -112,6 +113,7 @@ export type Database = {
           filename: string
           id?: string
           size_bytes: number
+          storage_path?: string | null
         }
         Update: {
           case_id?: string
@@ -121,6 +123,7 @@ export type Database = {
           filename?: string
           id?: string
           size_bytes?: number
+          storage_path?: string | null
         }
         Relationships: [
           {

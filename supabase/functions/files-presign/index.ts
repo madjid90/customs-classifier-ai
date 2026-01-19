@@ -72,13 +72,12 @@ Deno.serve(async (req) => {
     
     const { case_id, file_type, filename, content_type } = validation.data;
 
-    // Generate unique file path
-    const timestamp = Date.now();
-    const randomId = crypto.randomUUID().slice(0, 8);
-    const sanitizedFilename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+    // Generate stable file path (no timestamp prefix for cleaner paths)
+    const randomId = crypto.randomUUID();
+    const sanitizedFilename = filename.replace(/[^\w.-]+/g, "_");
     const filePath = case_id 
-      ? `${case_id}/${file_type}/${timestamp}-${randomId}-${sanitizedFilename}`
-      : `temp/${user.id}/${file_type}/${timestamp}-${randomId}-${sanitizedFilename}`;
+      ? `${case_id}/${file_type}/${randomId}_${sanitizedFilename}`
+      : `temp/${user.id}/${file_type}/${randomId}_${sanitizedFilename}`;
 
     logger.info(`Generating presigned URL for: ${filePath}`);
 

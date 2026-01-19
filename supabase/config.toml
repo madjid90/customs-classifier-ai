@@ -57,6 +57,9 @@ verify_jwt = false
 [functions.files-attach]
 verify_jwt = false
 
+[functions.files-read-url]
+verify_jwt = false
+
 [functions.admin]
 verify_jwt = false
 
@@ -91,13 +94,4 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.analyze-file]
-verify_jwt = false
-
-[functions.log-security-event]
-verify_jwt = false
-
-[functions.sync-hs-from-laws]
-verify_jwt = false
-
-[functions.send-invite]
 verify_jwt = false

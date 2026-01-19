@@ -1,4 +1,5 @@
 import axios, { AxiosError, AxiosResponse } from "axios";
+import { supabase } from "@/integrations/supabase/client";
 import { 
   createValidationInterceptor, 
   configureValidator, 
@@ -7,16 +8,17 @@ import {
   type ValidatorConfig 
 } from "./openapi-validator";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
-// Use Supabase functions URL for auth endpoints
 const FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1`;
 
+// ============================================================================
+// API CLIENT SETUP
+// ============================================================================
+
 export const api = axios.create({
-  baseURL: API_BASE_URL || FUNCTIONS_URL,
-  timeout: 10000,
+  baseURL: FUNCTIONS_URL,
+  timeout: 120000,
   headers: { 
     "Content-Type": "application/json", 
     "Accept": "application/json", 
@@ -24,14 +26,26 @@ export const api = axios.create({
   },
 });
 
-// Request interceptor
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("auth_token");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  // Add Supabase anon key for edge functions
-  if (config.url?.startsWith(FUNCTIONS_URL) || !API_BASE_URL) {
-    config.headers.apikey = SUPABASE_ANON_KEY;
+// Helper to get current session token
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "apikey": SUPABASE_ANON_KEY,
+  };
+  if (session?.access_token) {
+    headers["Authorization"] = `Bearer ${session.access_token}`;
   }
+  return headers;
+}
+
+// Request interceptor - add auth token from Supabase session
+api.interceptors.request.use(async (config) => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.access_token) {
+    config.headers.Authorization = `Bearer ${session.access_token}`;
+  }
+  config.headers.apikey = SUPABASE_ANON_KEY;
   return config;
 });
 
@@ -44,7 +58,6 @@ if (import.meta.env.DEV) {
         await validationInterceptor(response);
       } catch (error) {
         if (error instanceof OpenApiValidationError) {
-          // Log but don't block in non-strict mode (default behavior)
           console.warn("[API] Response validation warning:", error.message);
         }
       }
@@ -57,7 +70,7 @@ if (import.meta.env.DEV) {
 // Error handling interceptor
 api.interceptors.response.use(
   (res) => res,
-  (err: AxiosError<{ message?: string; error_message?: string }>) => {
+  async (err: AxiosError<{ message?: string; error_message?: string; error?: string }>) => {
     const status = err.response?.status;
     
     // Skip auth redirect for auth endpoints
@@ -66,9 +79,7 @@ api.interceptors.response.use(
                            err.config?.url?.includes("verify-otp");
     
     if (status === 401 && !isAuthEndpoint) {
-      localStorage.removeItem("auth_token");
-      localStorage.removeItem("auth_user");
-      localStorage.removeItem("auth_expires");
+      await supabase.auth.signOut();
       window.location.href = "/login";
       return Promise.reject(new Error("Session expiree. Veuillez vous reconnecter."));
     }
@@ -76,7 +87,7 @@ api.interceptors.response.use(
     if (status === 429) return Promise.reject(new Error("Trop de requetes. Veuillez patienter."));
     if (status === 423) return Promise.reject(new Error("Compte temporairement verrouille."));
     if (status && status >= 500) return Promise.reject(new Error("Erreur serveur. Veuillez reessayer."));
-    const msg = err.response?.data?.message || err.response?.data?.error_message || err.message;
+    const msg = err.response?.data?.message || err.response?.data?.error_message || err.response?.data?.error || err.message;
     return Promise.reject(new Error(msg));
   }
 );
@@ -85,39 +96,17 @@ api.interceptors.response.use(
 export { configureValidator, getValidatorConfig, OpenApiValidationError };
 export type { ValidatorConfig };
 
-// Auth endpoints - call edge functions directly
-export async function sendOtp(phone: string) {
-  return axios.post(`${FUNCTIONS_URL}/send-otp`, { phone }, {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-    },
-  });
-}
+// ============================================================================
+// CASES ENDPOINTS
+// ============================================================================
 
-export async function verifyOtp(phone: string, otp: string) {
-  return axios.post(`${FUNCTIONS_URL}/verify-otp`, { phone, otp }, {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-    },
-  });
-}
-
-// Cases endpoints - call edge function directly
 export async function createCase(data: { 
   type_import_export: "import" | "export"; 
   origin_country: string; 
   product_name: string; 
 }) {
-  const token = localStorage.getItem("auth_token");
-  return axios.post(`${FUNCTIONS_URL}/cases`, data, {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": token ? `Bearer ${token}` : "",
-    },
-  });
+  const headers = await getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/cases`, data, { headers });
 }
 
 export async function getCases(params?: {
@@ -129,71 +118,43 @@ export async function getCases(params?: {
   date_from?: string;
   date_to?: string;
 }) {
-  const token = localStorage.getItem("auth_token");
-  return axios.get(`${FUNCTIONS_URL}/cases`, {
-    params,
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": token ? `Bearer ${token}` : "",
-    },
-  });
+  const headers = await getAuthHeaders();
+  return axios.get(`${FUNCTIONS_URL}/cases`, { params, headers });
 }
 
 export async function getCaseDetail(caseId: string) {
-  const token = localStorage.getItem("auth_token");
-  return axios.get(`${FUNCTIONS_URL}/cases/${caseId}`, {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": token ? `Bearer ${token}` : "",
-    },
-  });
+  const headers = await getAuthHeaders();
+  return axios.get(`${FUNCTIONS_URL}/cases/${caseId}`, { headers });
 }
 
 export async function validateCase(caseId: string) {
-  const token = localStorage.getItem("auth_token");
-  return axios.post(`${FUNCTIONS_URL}/cases/${caseId}/validate`, {}, {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": token ? `Bearer ${token}` : "",
-    },
-  });
+  const headers = await getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/cases/${caseId}/validate`, {}, { headers });
 }
 
-// Files endpoints - call edge function directly
+// ============================================================================
+// FILES ENDPOINTS
+// ============================================================================
+
 export async function presignFile(data: {
   case_id: string | null;
   file_type: string;
   filename: string;
   content_type: string;
 }) {
-  const token = localStorage.getItem("auth_token");
-  return axios.post(`${FUNCTIONS_URL}/files-presign`, data, {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": token ? `Bearer ${token}` : "",
-    },
-  });
+  const headers = await getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/files-presign`, data, { headers });
 }
 
-// Attach file to case - call edge function directly
 export async function attachFile(caseId: string, data: {
   file_type: string;
   file_url: string;
   filename: string;
   size_bytes: number;
+  storage_path?: string;
 }) {
-  const token = localStorage.getItem("auth_token");
-  return axios.post(`${FUNCTIONS_URL}/files-attach/${caseId}`, data, {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": token ? `Bearer ${token}` : "",
-    },
-  });
+  const headers = await getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/files-attach/${caseId}`, data, { headers });
 }
 
 export async function uploadAndAttachFile(caseId: string, file: File, fileType: string) {
@@ -204,7 +165,7 @@ export async function uploadAndAttachFile(caseId: string, file: File, fileType: 
     content_type: file.type,
   });
 
-  const { upload_url, file_url } = presignRes.data;
+  const { upload_url, file_url, file_path } = presignRes.data;
 
   await fetch(upload_url, {
     method: "PUT",
@@ -217,13 +178,23 @@ export async function uploadAndAttachFile(caseId: string, file: File, fileType: 
     file_url,
     filename: file.name,
     size_bytes: file.size,
+    storage_path: file_path,
   });
 
   return { file_url, attach_id: attachRes.data.id };
 }
 
-// Classification endpoint - call edge function directly
-// ANTI-HALLUCINATION: Response is validated before being returned
+// Get fresh signed URL for reading a file
+export async function getFileReadUrl(caseId: string, fileId: string): Promise<string> {
+  const headers = await getAuthHeaders();
+  const response = await axios.post(`${FUNCTIONS_URL}/files-read-url`, { case_id: caseId, file_id: fileId }, { headers });
+  return response.data.url;
+}
+
+// ============================================================================
+// CLASSIFICATION ENDPOINT
+// ============================================================================
+
 import { validateClassifyResponse, formatValidationErrors, canDisplayResult } from "./classify-validator";
 import type { HSResult } from "./types";
 
@@ -236,15 +207,11 @@ export async function classify(payload: {
     origin_country: string;
   };
 }): Promise<{ data: HSResult }> {
-  const token = localStorage.getItem("auth_token");
+  const headers = await getAuthHeaders();
   
   const response = await axios.post(`${FUNCTIONS_URL}/classify`, payload, {
     timeout: 120000,
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": token ? `Bearer ${token}` : "",
-    },
+    headers,
   });
 
   // ===== ANTI-HALLUCINATION VALIDATION =====
@@ -254,7 +221,6 @@ export async function classify(payload: {
     console.error("[ANTI-HALLUCINATION] Classification response validation FAILED:");
     console.error(formatValidationErrors(validation));
     
-    // Return ERROR status instead of invalid response
     const errorResult: HSResult = {
       status: "ERROR",
       recommended_code: null,
@@ -279,36 +245,24 @@ export async function classify(payload: {
   return { data: validation.sanitizedResult! };
 }
 
-// Export validation utility for use in components
 export { canDisplayResult };
 
-// Export endpoint - call edge function directly
+// ============================================================================
+// EXPORT ENDPOINT
+// ============================================================================
+
 export async function exportPdf(caseId: string) {
-  const token = localStorage.getItem("auth_token");
-  return axios.post(`${FUNCTIONS_URL}/export-pdf`, { case_id: caseId }, {
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": token ? `Bearer ${token}` : "",
-    },
-  });
+  const headers = await getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/export-pdf`, { case_id: caseId }, { headers });
 }
 
-// Admin endpoints - call edge function directly
-const adminHeaders = () => {
-  const token = localStorage.getItem("auth_token");
-  return {
-    "Content-Type": "application/json",
-    "apikey": SUPABASE_ANON_KEY,
-    "Authorization": token ? `Bearer ${token}` : "",
-  };
-};
+// ============================================================================
+// ADMIN ENDPOINTS
+// ============================================================================
 
 export async function getIngestionList(params?: { limit?: number; offset?: number; status?: string; source?: string }) {
-  return axios.get(`${FUNCTIONS_URL}/admin/ingestion/list`, {
-    params,
-    headers: adminHeaders(),
-  });
+  const headers = await getAuthHeaders();
+  return axios.get(`${FUNCTIONS_URL}/admin/ingestion/list`, { params, headers });
 }
 
 export async function registerIngestion(data: {
@@ -317,38 +271,31 @@ export async function registerIngestion(data: {
   file_url: string;
   filename?: string;
 }) {
-  return axios.post(`${FUNCTIONS_URL}/admin/ingestion/register`, data, {
-    headers: adminHeaders(),
-  });
+  const headers = await getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/admin/ingestion/register`, data, { headers });
 }
 
 export async function runEtl(ingestionId: string) {
-  return axios.post(`${FUNCTIONS_URL}/admin/etl/run`, { ingestion_id: ingestionId }, {
-    headers: adminHeaders(),
-  });
+  const headers = await getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/admin/etl/run`, { ingestion_id: ingestionId }, { headers });
 }
 
 export async function getIngestionLogs(ingestionId: string) {
-  return axios.get(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/logs`, {
-    headers: adminHeaders(),
-  });
+  const headers = await getAuthHeaders();
+  return axios.get(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/logs`, { headers });
 }
 
 export async function retryIngestion(ingestionId: string) {
-  return axios.post(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/retry`, {}, {
-    headers: adminHeaders(),
-  });
+  const headers = await getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/retry`, {}, { headers });
 }
 
 export async function disableIngestion(ingestionId: string) {
-  return axios.post(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/disable`, {}, {
-    headers: adminHeaders(),
-  });
+  const headers = await getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/disable`, {}, { headers });
 }
 
 export async function searchKB(q: string, params?: { limit?: number; source?: string }) {
-  return axios.get(`${FUNCTIONS_URL}/admin/kb/search`, {
-    params: { q, ...params },
-    headers: adminHeaders(),
-  });
+  const headers = await getAuthHeaders();
+  return axios.get(`${FUNCTIONS_URL}/admin/kb/search`, { params: { q, ...params }, headers });
 }

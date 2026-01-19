@@ -62,11 +62,11 @@ export default function LoginPage() {
 
     setIsLoading(true);
     try {
-      const { error, expiresIn } = await sendOtpCode(phone);
+      const { error } = await sendOtpCode(phone);
       
       if (error) {
         const message = error.message;
-        if (message.includes("Trop de requetes") || message.includes("429")) {
+        if (message.includes("rate") || message.includes("429") || message.includes("limit")) {
           setPhoneError("Trop de tentatives. Veuillez patienter.");
         } else {
           setPhoneError(message || "Erreur lors de l'envoi du code");
@@ -75,7 +75,7 @@ export default function LoginPage() {
       }
 
       setStep("otp");
-      setCountdown(expiresIn || 300);
+      setCountdown(60); // 60 seconds cooldown for resend
       toast({
         title: "Code envoye",
         description: `Un code de verification a ete envoye au ${phone}`,
@@ -101,11 +101,11 @@ export default function LoginPage() {
       
       if (error) {
         const message = error.message;
-        if (message.includes("429") || message.includes("Trop de requetes")) {
+        if (message.includes("429") || message.includes("rate") || message.includes("limit")) {
           setOtpError("Trop de tentatives. Veuillez patienter.");
-        } else if (message.includes("423") || message.includes("verrouille") || message.includes("bloque")) {
-          setOtpError("Compte temporairement verrouille. Reessayez plus tard.");
-        } else if (message.includes("invalide") || message.includes("400")) {
+        } else if (message.includes("expired")) {
+          setOtpError("Code expiré. Veuillez en demander un nouveau.");
+        } else if (message.includes("invalid") || message.includes("Token")) {
           setOtpError("Code invalide. Verifiez et reessayez.");
         } else {
           setOtpError(message || "Erreur de verification");
@@ -128,7 +128,7 @@ export default function LoginPage() {
     
     setIsLoading(true);
     try {
-      const { error, expiresIn } = await sendOtpCode(phone);
+      const { error } = await sendOtpCode(phone);
       
       if (error) {
         toast({
@@ -139,7 +139,7 @@ export default function LoginPage() {
         return;
       }
 
-      setCountdown(expiresIn || 300);
+      setCountdown(60);
       setOtp("");
       setOtpError("");
       toast({
@@ -255,7 +255,7 @@ export default function LoginPage() {
                   }`}
                 >
                   {countdown > 0
-                    ? `Renvoyer le code dans ${Math.floor(countdown / 60)}:${(countdown % 60).toString().padStart(2, "0")}`
+                    ? `Renvoyer le code dans ${countdown}s`
                     : "Renvoyer le code"}
                 </button>
               </div>

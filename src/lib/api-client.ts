@@ -1,5 +1,4 @@
 import axios, { AxiosError, AxiosResponse } from "axios";
-import { supabase } from "@/integrations/supabase/client";
 import { 
   createValidationInterceptor, 
   configureValidator, 
@@ -11,6 +10,8 @@ import {
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1`;
+
+const AUTH_STORAGE_KEY = "custom_auth_token";
 
 // ============================================================================
 // API CLIENT SETUP
@@ -26,24 +27,24 @@ export const api = axios.create({
   },
 });
 
-// Helper to get current session token
-async function getAuthHeaders(): Promise<Record<string, string>> {
-  const { data: { session } } = await supabase.auth.getSession();
+// Helper to get auth headers from localStorage (custom OTP token)
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem(AUTH_STORAGE_KEY);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "apikey": SUPABASE_ANON_KEY,
   };
-  if (session?.access_token) {
-    headers["Authorization"] = `Bearer ${session.access_token}`;
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
   return headers;
 }
 
-// Request interceptor - add auth token from Supabase session
-api.interceptors.request.use(async (config) => {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session?.access_token) {
-    config.headers.Authorization = `Bearer ${session.access_token}`;
+// Request interceptor - add auth token from localStorage
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem(AUTH_STORAGE_KEY);
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
   }
   config.headers.apikey = SUPABASE_ANON_KEY;
   return config;
@@ -79,7 +80,9 @@ api.interceptors.response.use(
                            err.config?.url?.includes("verify-otp");
     
     if (status === 401 && !isAuthEndpoint) {
-      await supabase.auth.signOut();
+      // Clear custom auth token and redirect
+      localStorage.removeItem(AUTH_STORAGE_KEY);
+      localStorage.removeItem("custom_auth_user");
       window.location.href = "/login";
       return Promise.reject(new Error("Session expiree. Veuillez vous reconnecter."));
     }
@@ -105,7 +108,7 @@ export async function createCase(data: {
   origin_country: string; 
   product_name: string; 
 }) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.post(`${FUNCTIONS_URL}/cases`, data, { headers });
 }
 
@@ -118,17 +121,17 @@ export async function getCases(params?: {
   date_from?: string;
   date_to?: string;
 }) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.get(`${FUNCTIONS_URL}/cases`, { params, headers });
 }
 
 export async function getCaseDetail(caseId: string) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.get(`${FUNCTIONS_URL}/cases/${caseId}`, { headers });
 }
 
 export async function validateCase(caseId: string) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.post(`${FUNCTIONS_URL}/cases/${caseId}/validate`, {}, { headers });
 }
 
@@ -142,7 +145,7 @@ export async function presignFile(data: {
   filename: string;
   content_type: string;
 }) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.post(`${FUNCTIONS_URL}/files-presign`, data, { headers });
 }
 
@@ -153,7 +156,7 @@ export async function attachFile(caseId: string, data: {
   size_bytes: number;
   storage_path?: string;
 }) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.post(`${FUNCTIONS_URL}/files-attach/${caseId}`, data, { headers });
 }
 
@@ -186,7 +189,7 @@ export async function uploadAndAttachFile(caseId: string, file: File, fileType: 
 
 // Get fresh signed URL for reading a file
 export async function getFileReadUrl(caseId: string, fileId: string): Promise<string> {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   const response = await axios.post(`${FUNCTIONS_URL}/files-read-url`, { case_id: caseId, file_id: fileId }, { headers });
   return response.data.url;
 }
@@ -207,7 +210,7 @@ export async function classify(payload: {
     origin_country: string;
   };
 }): Promise<{ data: HSResult }> {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   
   const response = await axios.post(`${FUNCTIONS_URL}/classify`, payload, {
     timeout: 120000,
@@ -252,7 +255,7 @@ export { canDisplayResult };
 // ============================================================================
 
 export async function exportPdf(caseId: string) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.post(`${FUNCTIONS_URL}/export-pdf`, { case_id: caseId }, { headers });
 }
 
@@ -261,7 +264,7 @@ export async function exportPdf(caseId: string) {
 // ============================================================================
 
 export async function getIngestionList(params?: { limit?: number; offset?: number; status?: string; source?: string }) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.get(`${FUNCTIONS_URL}/admin/ingestion/list`, { params, headers });
 }
 
@@ -271,31 +274,31 @@ export async function registerIngestion(data: {
   file_url: string;
   filename?: string;
 }) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.post(`${FUNCTIONS_URL}/admin/ingestion/register`, data, { headers });
 }
 
 export async function runEtl(ingestionId: string) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.post(`${FUNCTIONS_URL}/admin/etl/run`, { ingestion_id: ingestionId }, { headers });
 }
 
 export async function getIngestionLogs(ingestionId: string) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.get(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/logs`, { headers });
 }
 
 export async function retryIngestion(ingestionId: string) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.post(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/retry`, {}, { headers });
 }
 
 export async function disableIngestion(ingestionId: string) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.post(`${FUNCTIONS_URL}/admin/ingestion/${ingestionId}/disable`, {}, { headers });
 }
 
 export async function searchKB(q: string, params?: { limit?: number; source?: string }) {
-  const headers = await getAuthHeaders();
+  const headers = getAuthHeaders();
   return axios.get(`${FUNCTIONS_URL}/admin/kb/search`, { params: { q, ...params }, headers });
 }

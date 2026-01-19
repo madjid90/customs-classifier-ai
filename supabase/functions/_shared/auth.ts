@@ -1,6 +1,7 @@
-import { createClient, SupabaseClient, User } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { jwtVerify } from "https://deno.land/x/jose@v4.14.4/index.ts";
 import { logger } from "./logger.ts";
-import { corsHeaders, getCorsHeaders } from "./cors.ts";
+import { getCorsHeaders } from "./cors.ts";
 
 // ============================================================================
 // TYPES
@@ -16,8 +17,16 @@ export interface UserProfile {
 
 export type UserRole = "admin" | "manager" | "agent";
 
+// User object returned by getUserFromToken (for backward compatibility)
+export interface User {
+  id: string;
+  phone?: string;
+  company_id?: string;
+  role?: UserRole;
+}
+
 export interface AuthenticatedUser {
-  user: User;
+  user: { id: string };
   profile: UserProfile;
   role: UserRole;
 }
@@ -25,6 +34,16 @@ export interface AuthenticatedUser {
 export type AuthResult = 
   | { success: true; data: AuthenticatedUser }
   | { success: false; error: Response };
+
+// Custom JWT payload structure
+interface CustomJwtPayload {
+  sub: string;          // user_id
+  phone: string;
+  company_id: string;
+  role: UserRole;
+  iat: number;
+  exp: number;
+}
 
 // ============================================================================
 // ENVIRONMENT HELPERS
@@ -42,12 +61,6 @@ function getSupabaseServiceKey(): string {
   return key;
 }
 
-function getSupabaseAnonKey(): string {
-  const key = Deno.env.get("SUPABASE_ANON_KEY");
-  if (!key) throw new Error("SUPABASE_ANON_KEY non configurée");
-  return key;
-}
-
 // ============================================================================
 // SUPABASE CLIENT FACTORY
 // ============================================================================
@@ -59,43 +72,73 @@ export function createServiceClient(): SupabaseClient {
   return createClient(getSupabaseUrl(), getSupabaseServiceKey());
 }
 
-/**
- * Creates a Supabase client with the user's token for authenticated operations
- */
-export function createUserClient(token: string): SupabaseClient {
-  return createClient(getSupabaseUrl(), getSupabaseAnonKey(), {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-  });
-}
-
 // ============================================================================
-// JWT / USER EXTRACTION
+// CUSTOM JWT VALIDATION
 // ============================================================================
 
 /**
- * Extracts and validates user from Authorization header
- * Returns null if token is invalid or missing
+ * Validates the custom JWT token from Authorization header
+ * Returns the decoded payload if valid
  */
-export async function getUserFromToken(authHeader: string | null): Promise<User | null> {
+async function validateCustomJwt(authHeader: string | null): Promise<CustomJwtPayload | null> {
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     logger.debug("[auth] No valid Authorization header");
     return null;
   }
 
   const token = authHeader.replace("Bearer ", "");
-  const supabase = createUserClient(token);
-
-  try {
-    const { data: { user }, error } = await supabase.auth.getUser();
-    if (error || !user) {
-      logger.warn("[auth] Token validation failed:", error?.message);
-      return null;
-    }
-    return user;
-  } catch (e) {
-    logger.error("[auth] Error validating token:", e);
+  const jwtSecret = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  
+  if (!jwtSecret) {
+    logger.error("[auth] SUPABASE_SERVICE_ROLE_KEY not configured");
     return null;
   }
+
+  try {
+    const secretKey = new TextEncoder().encode(jwtSecret);
+    const { payload } = await jwtVerify(token, secretKey);
+    
+    // Validate required fields
+    if (!payload.sub || !payload.phone || !payload.company_id) {
+      logger.warn("[auth] JWT missing required fields");
+      return null;
+    }
+
+    return {
+      sub: payload.sub as string,
+      phone: payload.phone as string,
+      company_id: payload.company_id as string,
+      role: (payload.role as UserRole) || "agent",
+      iat: payload.iat as number,
+      exp: payload.exp as number,
+    };
+  } catch (error) {
+    logger.warn("[auth] JWT validation failed:", error);
+    return null;
+  }
+}
+
+// ============================================================================
+// GET USER FROM TOKEN (for backward compatibility)
+// ============================================================================
+
+/**
+ * Extracts user from Authorization header (legacy function for backward compatibility)
+ * Returns User object if token is valid, null otherwise
+ */
+export async function getUserFromToken(authHeader: string | null): Promise<User | null> {
+  const payload = await validateCustomJwt(authHeader);
+  
+  if (!payload) {
+    return null;
+  }
+
+  return {
+    id: payload.sub,
+    phone: payload.phone,
+    company_id: payload.company_id,
+    role: payload.role,
+  };
 }
 
 // ============================================================================
@@ -152,7 +195,7 @@ export async function getUserRole(userId: string): Promise<UserRole> {
 // ============================================================================
 
 /**
- * Complete authentication: validates token, fetches profile and role
+ * Complete authentication: validates custom JWT token, builds profile from token claims
  * Returns AuthResult with either authenticated user data or error response
  */
 export async function authenticateRequest(
@@ -162,14 +205,14 @@ export async function authenticateRequest(
     requireRole?: UserRole[];
   } = {}
 ): Promise<AuthResult> {
-  const { requireProfile = true, requireRole } = options;
+  const { requireRole } = options;
   const corsHeaders = getCorsHeaders(req);
 
-  // Extract token
+  // Extract and validate token
   const authHeader = req.headers.get("Authorization");
-  const user = await getUserFromToken(authHeader);
+  const payload = await validateCustomJwt(authHeader);
 
-  if (!user) {
+  if (!payload) {
     return {
       success: false,
       error: new Response(
@@ -179,23 +222,16 @@ export async function authenticateRequest(
     };
   }
 
-  // Get profile if required
-  let profile: UserProfile | null = null;
-  if (requireProfile) {
-    profile = await getUserProfile(user.id);
-    if (!profile) {
-      return {
-        success: false,
-        error: new Response(
-          JSON.stringify({ error: "Profil non trouvé", code: "PROFILE_NOT_FOUND" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        ),
-      };
-    }
-  }
+  // Build profile from JWT claims (avoids DB lookup for every request)
+  const profile: UserProfile = {
+    id: payload.sub, // Using user_id as profile id for simplicity
+    user_id: payload.sub,
+    company_id: payload.company_id,
+    phone: payload.phone,
+    created_at: new Date().toISOString(), // Not critical for auth
+  };
 
-  // Get role
-  const role = await getUserRole(user.id);
+  const role = payload.role;
 
   // Check role permissions if required
   if (requireRole && !requireRole.includes(role)) {
@@ -213,13 +249,13 @@ export async function authenticateRequest(
     };
   }
 
-  logger.info(`[auth] User authenticated: ${user.id} (role: ${role})`);
+  logger.info(`[auth] User authenticated: ${payload.sub} (role: ${role})`);
 
   return {
     success: true,
     data: {
-      user,
-      profile: profile!,
+      user: { id: payload.sub },
+      profile,
       role,
     },
   };

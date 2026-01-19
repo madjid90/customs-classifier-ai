@@ -630,71 +630,203 @@ async function applyDUMSignal(
 }
 
 // ============================================================================
-// ÉTAPE 3 : RECHERCHE PREUVES RAG
+// ÉTAPE 3 : RECHERCHE PREUVES RAG (MULTI-SOURCES INTELLIGENT)
 // ============================================================================
+
+interface RAGSearchConfig {
+  sources: ("omd" | "maroc" | "lois" | "finance")[];
+  minSimilarity: number;
+  maxPerSource: number;
+}
 
 async function searchEvidenceRAG(
   supabase: any,
   profile: ProductProfile,
   candidates: HSCandidate[],
-  limit = 15
+  limit = 20
 ): Promise<Evidence[]> {
-  console.log("=== ÉTAPE 3: RECHERCHE PREUVES RAG ===");
+  console.log("=== ÉTAPE 3: RECHERCHE PREUVES RAG (MULTI-SOURCES) ===");
   
-  // Construire query avec product + description + top 3 labels candidats
-  const queryText = [
+  const allEvidence: Evidence[] = [];
+
+  // ============================================
+  // PARTIE A : Construire requêtes de recherche intelligentes
+  // ============================================
+  
+  // Requête principale basée sur le produit
+  const mainQuery = [
     profile.product_name,
     profile.description,
     profile.usage_function,
-    ...candidates.slice(0, 3).map(c => c.label_fr),
+    ...profile.material_composition.slice(0, 3),
   ].filter(Boolean).join(" ");
 
-  if (!queryText.trim()) {
-    console.log("Query vide → evidence vide");
-    return [];
-  }
+  // Requête basée sur les codes HS candidats
+  const hsQuery = candidates.slice(0, 5).map(c => 
+    `${c.chapter_2} ${c.code_6} ${c.label_fr}`
+  ).join(" ");
 
+  // Requête technique basée sur les specs
+  const techQuery = Object.entries(profile.technical_specs)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(" ");
+
+  console.log(`[RAG] Requête principale: "${mainQuery.substring(0, 100)}..."`);
+
+  // ============================================
+  // PARTIE B : Recherche vectorielle multi-sources
+  // ============================================
+  
   try {
-    // Générer embedding
-    const queryEmbedding = await withTimeout(
-      generateEmbedding(queryText),
+    // Générer embedding pour recherche principale
+    const mainEmbedding = await withTimeout(
+      generateEmbedding(mainQuery + " " + hsQuery),
       EMBEDDING_TIMEOUT_MS,
-      "génération embedding RAG"
+      "génération embedding RAG principal"
     );
     
-    if (queryEmbedding.length === 0) {
-      console.log("Embedding vide");
-      return [];
+    if (mainEmbedding.length > 0) {
+      // Recherche dans kb_chunks (Notes OMD, réglementations Maroc, lois)
+      const { data: kbChunks, error: kbError } = await supabase.rpc("match_kb_chunks", {
+        query_embedding: mainEmbedding,
+        match_threshold: 0.35,
+        match_count: limit,
+        filter_sources: null, // Toutes les sources
+      });
+
+      if (kbError) {
+        console.error("[RAG] Erreur match_kb_chunks:", kbError);
+      } else if (kbChunks && kbChunks.length > 0) {
+        console.log(`[RAG] kb_chunks: ${kbChunks.length} résultats`);
+        for (const chunk of kbChunks) {
+          allEvidence.push({
+            source: chunk.source as Evidence["source"],
+            doc_id: chunk.doc_id,
+            ref: chunk.ref,
+            excerpt: chunk.text.slice(0, 600),
+            similarity: chunk.similarity,
+          });
+        }
+      }
     }
 
-    // Recherche vectorielle
-    const { data: chunks, error } = await supabase.rpc("match_kb_chunks", {
-      query_embedding: queryEmbedding,
-      match_threshold: 0.35,
-      match_count: limit,
-      filter_sources: null,
-    });
+    // ============================================
+    // PARTIE C : Recherche textuelle complémentaire
+    // ============================================
+    
+    // Extraire mots-clés pour recherche textuelle
+    const keywords = mainQuery
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .split(/\s+/)
+      .filter(k => k.length > 3)
+      .slice(0, 8);
 
-    if (error) {
-      console.error("Erreur match_kb_chunks:", error);
-      return [];
+    if (keywords.length > 0 && allEvidence.length < limit) {
+      console.log(`[RAG] Recherche textuelle avec mots-clés:`, keywords.slice(0, 5).join(", "));
+      
+      // Recherche hybride avec search_kb_hybrid
+      const { data: hybridResults, error: hybridError } = await supabase.rpc("search_kb_hybrid", {
+        query_text: keywords.join(" "),
+        query_embedding: mainEmbedding.length > 0 ? mainEmbedding : null,
+        match_count: Math.max(5, limit - allEvidence.length),
+        filter_sources: null,
+      });
+
+      if (hybridError) {
+        console.error("[RAG] Erreur search_kb_hybrid:", hybridError);
+      } else if (hybridResults && hybridResults.length > 0) {
+        console.log(`[RAG] search_kb_hybrid: ${hybridResults.length} résultats`);
+        
+        // Ajouter uniquement les résultats non dupliqués
+        const existingIds = new Set(allEvidence.map(e => e.doc_id + e.ref));
+        for (const result of hybridResults) {
+          const key = result.doc_id + result.ref;
+          if (!existingIds.has(key)) {
+            existingIds.add(key);
+            allEvidence.push({
+              source: result.source as Evidence["source"],
+              doc_id: result.doc_id,
+              ref: result.ref,
+              excerpt: result.text.slice(0, 600),
+              similarity: result.similarity,
+            });
+          }
+        }
+      }
     }
 
-    const evidence: Evidence[] = (chunks || []).map((chunk: any) => ({
-      source: chunk.source as Evidence["source"],
-      doc_id: chunk.doc_id,
-      ref: chunk.ref,
-      excerpt: chunk.text.slice(0, 500),
-      similarity: chunk.similarity,
-    }));
+    // ============================================
+    // PARTIE D : Recherche dans les articles de loi de finance
+    // ============================================
+    
+    if (allEvidence.length < limit) {
+      // Chercher dans finance_law_articles si la table existe
+      try {
+        const financeKeywords = keywords.slice(0, 5);
+        if (financeKeywords.length > 0) {
+          const orConditions = financeKeywords.map(k => `content.ilike.%${k}%`).join(",");
+          
+          const { data: financeArticles, error: financeError } = await supabase
+            .from("finance_law_articles")
+            .select("id, year, article_number, title, content")
+            .or(orConditions)
+            .limit(5);
 
-    console.log(`evidence[]: ${evidence.length} extraits (similarité > 0.35)`);
-    return evidence;
+          if (!financeError && financeArticles && financeArticles.length > 0) {
+            console.log(`[RAG] finance_law_articles: ${financeArticles.length} résultats`);
+            for (const article of financeArticles) {
+              allEvidence.push({
+                source: "lois",
+                doc_id: `lf_${article.year}_${article.article_number}`,
+                ref: `Loi de Finance ${article.year} - Art. ${article.article_number}`,
+                excerpt: article.content.slice(0, 600),
+                similarity: 0.5, // Score fixe pour recherche textuelle
+              });
+            }
+          }
+        }
+      } catch (e) {
+        // Table peut ne pas exister, ignorer silencieusement
+        console.log("[RAG] finance_law_articles non disponible");
+      }
+    }
 
   } catch (e) {
-    console.error("Erreur RAG:", e);
-    return [];
+    console.error("[RAG] Erreur globale:", e);
   }
+
+  // ============================================
+  // PARTIE E : Tri et déduplication finale
+  // ============================================
+  
+  // Trier par similarité décroissante
+  allEvidence.sort((a, b) => b.similarity - a.similarity);
+  
+  // Limiter et diversifier les sources
+  const finalEvidence: Evidence[] = [];
+  const sourceCount: Record<string, number> = {};
+  const maxPerSource = Math.ceil(limit / 3);
+
+  for (const e of allEvidence) {
+    sourceCount[e.source] = (sourceCount[e.source] || 0) + 1;
+    
+    // Limiter par source pour diversité
+    if (sourceCount[e.source] <= maxPerSource) {
+      finalEvidence.push(e);
+    }
+    
+    if (finalEvidence.length >= limit) break;
+  }
+
+  // Stats par source
+  const sourceStats = Object.entries(sourceCount)
+    .map(([s, c]) => `${s}=${c}`)
+    .join(", ");
+  console.log(`[RAG] Evidence finale: ${finalEvidence.length} extraits (${sourceStats})`);
+
+  return finalEvidence;
 }
 
 // ============================================================================
@@ -734,47 +866,90 @@ async function makeControlledDecision(
 
   const systemPrompt = `Tu es un expert en classification douanière marocaine.
 
+Tu as accès à une base de données complète contenant:
+- Notes explicatives de l'OMD (Organisation Mondiale des Douanes)
+- Réglementation douanière marocaine
+- Lois de finances et articles fiscaux
+- Historique des déclarations DUM validées
+- Nomenclature des codes HS avec descriptions enrichies
+
 RÈGLES ABSOLUES (VIOLATION = REJET):
 1. Tu DOIS choisir EXACTEMENT un code de candidates[] - AUCUNE INVENTION
 2. Tu DOIS justifier UNIQUEMENT avec des citations de evidence[]
-3. Si evidence[] est vide ou insuffisante → status='LOW_CONFIDENCE' ou 'NEED_INFO'
-4. Si incertain → status='NEED_INFO' avec UNE question discriminante
-5. AUCUNE connaissance externe, AUCUNE supposition
+3. Cite les sources spécifiques (ex: "Selon Note OMD Ch.84...", "Art. 15 LF 2024...")
+4. Si evidence[] est vide ou insuffisante → status='LOW_CONFIDENCE' ou 'NEED_INFO'
+5. Si incertain → status='NEED_INFO' avec UNE question discriminante
+6. AUCUNE connaissance externe, AUCUNE supposition
+
+ANALYSE DES PREUVES:
+- [OMD]: Notes officielles de classification, exemples de produits
+- [MAROC]: Règles spécifiques, restrictions, licences requises
+- [LOIS]: Taux de droits, exonérations, régimes économiques
+- [DUM]: Précédents de classification historiques
 
 Réponds en JSON:
 {
   "status": "DONE" | "NEED_INFO" | "LOW_CONFIDENCE",
   "recommended_code": "code_10 EXACT de candidates[]",
   "confidence": 0-100,
-  "justification_short": "2 phrases max citant evidence[]",
+  "justification_short": "2-3 phrases citant evidence[] avec sources",
   "alternatives": [{"code": "...", "reason": "...", "confidence": 0-100}],
   "evidence_used": ["ref1", "ref2"],
   "next_question": null ou {"id": "q_xxx", "label": "Question", "type": "text", "required": true}
 }`;
 
-  const userPrompt = `PRODUIT:
+  // Grouper les preuves par source pour une meilleure présentation
+  const evidenceBySource: Record<string, Evidence[]> = {};
+  for (const e of evidence) {
+    if (!evidenceBySource[e.source]) evidenceBySource[e.source] = [];
+    evidenceBySource[e.source].push(e);
+  }
+
+  const formattedEvidence = Object.entries(evidenceBySource)
+    .map(([source, items]) => {
+      const sourceLabel = {
+        omd: "📘 NOTES OMD (Organisation Mondiale des Douanes)",
+        maroc: "🇲🇦 RÉGLEMENTATION MAROCAINE",
+        lois: "⚖️ LOIS DE FINANCES ET ARTICLES FISCAUX",
+        dum: "📋 HISTORIQUE DUM (Déclarations validées)",
+        finance: "💰 LOIS DE FINANCES",
+      }[source] || source.toUpperCase();
+      
+      const itemsFormatted = items.slice(0, 4).map((e, i) => 
+        `  ${i + 1}. [${e.ref}] (pertinence: ${(e.similarity * 100).toFixed(0)}%)\n     "${e.excerpt.slice(0, 350)}..."`
+      ).join("\n");
+      
+      return `${sourceLabel}:\n${itemsFormatted}`;
+    })
+    .join("\n\n");
+
+  const userPrompt = `PRODUIT À CLASSIFIER:
 Nom: ${profile.product_name}
 Description: ${profile.description}
-Usage: ${profile.usage_function || "Non spécifié"}
-Matériaux: ${profile.material_composition.join(", ") || "Non spécifié"}
+Usage/Fonction: ${profile.usage_function || "Non spécifié"}
+Matériaux/Composition: ${profile.material_composition.join(", ") || "Non spécifié"}
 Marque: ${profile.brand || "Non spécifiée"}
+Modèle: ${profile.model || "Non spécifié"}
+Spécifications techniques: ${Object.entries(profile.technical_specs).map(([k, v]) => `${k}=${v}`).join(", ") || "Non spécifiées"}
 
-CONTEXTE:
+CONTEXTE OPÉRATIONNEL:
 Opération: ${context.type_import_export}
-Origine: ${context.origin_country}
-${Object.keys(answers).length > 0 ? `Réponses précédentes: ${JSON.stringify(answers)}` : ""}
+Pays d'origine: ${context.origin_country}
+${Object.keys(answers).length > 0 ? `Informations complémentaires: ${JSON.stringify(answers)}` : ""}
 
-CANDIDATES[] (CHOISIS UNIQUEMENT PARMI CETTE LISTE):
+════════════════════════════════════════════════════════════
+CODES CANDIDATS (CHOISIS UNIQUEMENT PARMI CETTE LISTE):
+════════════════════════════════════════════════════════════
 ${candidates.slice(0, 20).map((c, i) => 
-  `${i + 1}. ${c.code_10}: ${c.label_fr} [Score: ${c.score}]`
+  `${i + 1}. ${c.code_10}: ${c.label_fr}\n   [Score: ${c.score}] [Chapitre: ${c.chapter_2}] [Mots-clés: ${c.match_keywords.slice(0, 3).join(", ")}]`
 ).join("\n")}
 
-EVIDENCE[] (CITE UNIQUEMENT CES SOURCES):
+════════════════════════════════════════════════════════════
+BASE DE CONNAISSANCES (CITE UNIQUEMENT CES SOURCES):
+════════════════════════════════════════════════════════════
 ${evidence.length > 0 
-  ? evidence.slice(0, 12).map((e, i) => 
-      `${i + 1}. [${e.source.toUpperCase()}] ${e.ref} (sim: ${(e.similarity * 100).toFixed(0)}%):\n"${e.excerpt.slice(0, 300)}..."`
-    ).join("\n\n")
-  : "⚠️ AUCUNE EVIDENCE - RÉPONDS AVEC status='LOW_CONFIDENCE' ou 'NEED_INFO'"
+  ? formattedEvidence
+  : "⚠️ AUCUNE PREUVE TROUVÉE DANS LA BASE DE DONNÉES\n→ Tu DOIS répondre avec status='LOW_CONFIDENCE' ou 'NEED_INFO'"
 }`;
 
   const aiResponse = await withTimeout(

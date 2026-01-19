@@ -17,7 +17,8 @@ import {
   User,
   Menu,
   X,
-  Activity
+  Activity,
+  BookOpen
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -114,6 +115,13 @@ export function AppHeader() {
             <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuItem disabled className="text-xs text-muted-foreground">
                 {user?.role === "admin" ? "Administrateur" : user?.role === "manager" ? "Manager" : "Agent"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to="/guide" className="flex items-center">
+                  <BookOpen className="mr-2 h-4 w-4" />
+                  Guide d'utilisation
+                </Link>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleLogout} className="text-destructive">

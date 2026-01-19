@@ -8,7 +8,6 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
 // Target databases and their detection patterns
 const DATABASE_TARGETS = {
@@ -105,6 +104,7 @@ async function analyzeWithAI(content: string, filename: string): Promise<FileAna
   }
 
   // If confidence is low, use AI for deeper analysis
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (bestMatch.confidence < 50 && LOVABLE_API_KEY) {
     try {
       const aiResponse = await fetch("https://api.lovable.dev/v1/chat/completions", {
@@ -178,7 +178,7 @@ async function processAndStore(
   analysis: FileAnalysis,
   content: string,
   filename: string,
-  userId: string
+  _userId: string
 ): Promise<{ success: boolean; recordsCreated: number; error?: string }> {
   const versionLabel = new Date().toISOString().split("T")[0];
   let recordsCreated = 0;
@@ -397,7 +397,7 @@ serve(async (req) => {
     }
 
     const body = await req.json();
-    const { action, content, filename, file_url } = body;
+    const { action, content, filename } = body;
 
     // Action: analyze - just detect type
     if (action === "analyze") {

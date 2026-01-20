@@ -5,6 +5,17 @@
  * Uses Serper API (Google Search) when available, with graceful fallback.
  */
 
+// Check if external search is enabled
+function isExternalSearchEnabled(): boolean {
+  const enabled = Deno.env.get("EXTERNAL_SEARCH_ENABLED");
+  // Disabled only if explicitly set to 'false'
+  if (enabled === "false") {
+    return false;
+  }
+  // Enabled if SERPER_API_KEY is configured
+  return !!Deno.env.get("SERPER_API_KEY");
+}
+
 // Types
 export interface ExternalSearchResult {
   source: "adii" | "eu_taric" | "omd" | "other";
@@ -130,6 +141,12 @@ export async function searchExternalCustomsSources(
   query: string,
   options: SearchOptions = {}
 ): Promise<ExternalSearchResult[]> {
+  // Check if external search is enabled
+  if (!isExternalSearchEnabled()) {
+    console.log("[external-search] External search disabled via EXTERNAL_SEARCH_ENABLED=false");
+    return [];
+  }
+
   const serperApiKey = Deno.env.get("SERPER_API_KEY");
 
   if (!serperApiKey) {
@@ -203,6 +220,12 @@ export async function searchADII(
   query: string,
   options: SearchOptions = {}
 ): Promise<ExternalSearchResult[]> {
+  // Check if external search is enabled
+  if (!isExternalSearchEnabled()) {
+    console.log("[external-search] ADII search disabled via EXTERNAL_SEARCH_ENABLED=false");
+    return [];
+  }
+
   const serperApiKey = Deno.env.get("SERPER_API_KEY");
 
   if (!serperApiKey) {
@@ -265,6 +288,12 @@ export async function searchEUTaric(
   hsCode: string,
   options: SearchOptions = {}
 ): Promise<ExternalSearchResult[]> {
+  // Check if external search is enabled
+  if (!isExternalSearchEnabled()) {
+    console.log("[external-search] EU TARIC search disabled via EXTERNAL_SEARCH_ENABLED=false");
+    return [];
+  }
+
   const serperApiKey = Deno.env.get("SERPER_API_KEY");
 
   if (!serperApiKey) {

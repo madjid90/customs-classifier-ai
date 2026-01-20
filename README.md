@@ -59,6 +59,39 @@ This project is built with:
 - React
 - shadcn-ui
 - Tailwind CSS
+- Lovable Cloud (Supabase) for backend
+
+## Configuration recherche externe
+
+La recherche externe permet d'interroger les sites officiels de douane (ADII Maroc, EU TARIC, OMD) quand la base de données interne ne contient pas assez de résultats.
+
+### Obtenir une clé API Serper
+
+1. Créez un compte sur [Serper.dev](https://serper.dev)
+2. Obtenez votre clé API depuis le dashboard
+3. Serper offre 2500 recherches gratuites par mois
+
+### Configurer la variable d'environnement
+
+Dans Lovable Cloud, ajoutez le secret `SERPER_API_KEY` avec votre clé API.
+
+La recherche externe est **optionnelle** et se déclenche uniquement quand :
+- La base interne retourne moins de 3 résultats
+- `EXTERNAL_SEARCH_ENABLED` n'est pas défini à `false`
+- `SERPER_API_KEY` est configurée
+
+Pour désactiver la recherche externe même si la clé est configurée, ajoutez le secret :
+```
+EXTERNAL_SEARCH_ENABLED=false
+```
+
+### Sources interrogées
+
+| Source | Site | Description |
+|--------|------|-------------|
+| ADII | douane.gov.ma | Administration des Douanes Maroc |
+| EU TARIC | ec.europa.eu | Base tarifaire européenne |
+| OMD | wcoomd.org | Organisation Mondiale des Douanes |
 
 ## How can I deploy this project?
 

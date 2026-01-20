@@ -182,6 +182,66 @@ export type Database = {
           },
         ]
       }
+      classification_feedback: {
+        Row: {
+          case_id: string
+          comment: string | null
+          created_at: string
+          feedback_type: string
+          id: string
+          meta: Json | null
+          rating: number | null
+          result_id: string | null
+          suggested_code: string | null
+          updated_at: string
+          use_for_training: boolean | null
+          user_id: string
+        }
+        Insert: {
+          case_id: string
+          comment?: string | null
+          created_at?: string
+          feedback_type: string
+          id?: string
+          meta?: Json | null
+          rating?: number | null
+          result_id?: string | null
+          suggested_code?: string | null
+          updated_at?: string
+          use_for_training?: boolean | null
+          user_id: string
+        }
+        Update: {
+          case_id?: string
+          comment?: string | null
+          created_at?: string
+          feedback_type?: string
+          id?: string
+          meta?: Json | null
+          rating?: number | null
+          result_id?: string | null
+          suggested_code?: string | null
+          updated_at?: string
+          use_for_training?: boolean | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "classification_feedback_case_id_fkey"
+            columns: ["case_id"]
+            isOneToOne: false
+            referencedRelation: "cases"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "classification_feedback_result_id_fkey"
+            columns: ["result_id"]
+            isOneToOne: false
+            referencedRelation: "classification_results"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       classification_results: {
         Row: {
           alternatives: Json | null
@@ -879,7 +939,31 @@ export type Database = {
           usage_count: number
         }[]
       }
+      get_feedback_stats: {
+        Args: never
+        Returns: {
+          avg_rating: number
+          correct_count: number
+          incorrect_count: number
+          partial_count: number
+          total_feedback: number
+          training_examples: number
+        }[]
+      }
       get_ingestion_stats: { Args: never; Returns: Json }
+      get_training_examples: {
+        Args: { limit_count?: number }
+        Returns: {
+          case_id: string
+          comment: string
+          feedback_type: string
+          origin_country: string
+          original_code: string
+          product_name: string
+          rating: number
+          suggested_code: string
+        }[]
+      }
       get_user_company_id: { Args: { _user_id: string }; Returns: string }
       has_role: {
         Args: {

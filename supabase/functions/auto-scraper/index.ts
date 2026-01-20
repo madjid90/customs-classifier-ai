@@ -410,6 +410,227 @@ class WebScraper {
 }
 
 // ============================================================================
+// TEXT CHUNKING (from import-kb)
+// ============================================================================
+
+interface Chunk {
+  text: string;
+  ref: string;
+  start_char: number;
+  end_char: number;
+}
+
+function chunkText(
+  content: string,
+  docId: string,
+  refPrefix: string,
+  chunkSize = 1000,
+  chunkOverlap = 200
+): Chunk[] {
+  const chunks: Chunk[] = [];
+  
+  // Clean content
+  const cleanContent = content
+    .replace(/\r\n/g, "\n")
+    .replace(/\t/g, " ")
+    .replace(/ +/g, " ")
+    .trim();
+
+  if (cleanContent.length === 0) {
+    return [];
+  }
+
+  // Section patterns for intelligent chunking
+  const sectionPatterns = [
+    /^(#{1,3}\s+.+)$/gm,
+    /^(Article\s+\d+[\.\-]?\s*.*)$/gim,
+    /^(Chapitre\s+[IVXLCDM\d]+[\.\-]?\s*.*)$/gim,
+    /^(Section\s+[IVXLCDM\d]+[\.\-]?\s*.*)$/gim,
+    /^(\d{2}[\.\d]*\s+.+)$/gm,
+    /^(Note\s+\d+[\.\-]?\s*.*)$/gim,
+  ];
+
+  interface Section {
+    title: string;
+    content: string;
+    startIndex: number;
+  }
+
+  const sections: Section[] = [];
+  let lastIndex = 0;
+  let currentTitle = refPrefix || docId;
+
+  const allMatches: { index: number; title: string }[] = [];
+  
+  for (const pattern of sectionPatterns) {
+    let match;
+    const regex = new RegExp(pattern.source, pattern.flags);
+    while ((match = regex.exec(cleanContent)) !== null) {
+      allMatches.push({ index: match.index, title: match[1].trim() });
+    }
+  }
+
+  allMatches.sort((a, b) => a.index - b.index);
+
+  for (let i = 0; i < allMatches.length; i++) {
+    const match = allMatches[i];
+    const nextIndex = allMatches[i + 1]?.index ?? cleanContent.length;
+    
+    if (match.index > lastIndex) {
+      sections.push({
+        title: currentTitle,
+        content: cleanContent.slice(lastIndex, match.index).trim(),
+        startIndex: lastIndex,
+      });
+    }
+    
+    currentTitle = `${refPrefix ? refPrefix + " > " : ""}${match.title}`;
+    lastIndex = match.index;
+  }
+
+  if (lastIndex < cleanContent.length) {
+    sections.push({
+      title: currentTitle,
+      content: cleanContent.slice(lastIndex).trim(),
+      startIndex: lastIndex,
+    });
+  }
+
+  if (sections.length === 0) {
+    sections.push({
+      title: refPrefix || docId,
+      content: cleanContent,
+      startIndex: 0,
+    });
+  }
+
+  let chunkIndex = 0;
+  
+  for (const section of sections) {
+    if (section.content.length === 0) continue;
+
+    if (section.content.length <= chunkSize) {
+      chunks.push({
+        text: section.content,
+        ref: section.title,
+        start_char: section.startIndex,
+        end_char: section.startIndex + section.content.length,
+      });
+      chunkIndex++;
+    } else {
+      const paragraphs = section.content.split(/\n\n+/);
+      let currentChunk = "";
+      let chunkStart = section.startIndex;
+      let localOffset = 0;
+
+      for (const para of paragraphs) {
+        if (currentChunk.length + para.length + 2 <= chunkSize) {
+          currentChunk += (currentChunk ? "\n\n" : "") + para;
+        } else {
+          if (currentChunk.length > 0) {
+            chunks.push({
+              text: currentChunk,
+              ref: `${section.title} [${chunkIndex + 1}]`,
+              start_char: chunkStart,
+              end_char: chunkStart + currentChunk.length,
+            });
+            chunkIndex++;
+          }
+          
+          if (para.length > chunkSize) {
+            const sentences = para.match(/[^.!?]+[.!?]+/g) || [para];
+            currentChunk = "";
+            
+            for (const sentence of sentences) {
+              if (currentChunk.length + sentence.length <= chunkSize) {
+                currentChunk += sentence;
+              } else {
+                if (currentChunk.length > 0) {
+                  chunks.push({
+                    text: currentChunk,
+                    ref: `${section.title} [${chunkIndex + 1}]`,
+                    start_char: section.startIndex + localOffset,
+                    end_char: section.startIndex + localOffset + currentChunk.length,
+                  });
+                  chunkIndex++;
+                  localOffset += currentChunk.length;
+                }
+                currentChunk = sentence;
+              }
+            }
+          } else {
+            currentChunk = para;
+            chunkStart = section.startIndex + localOffset;
+          }
+        }
+        localOffset += para.length + 2;
+      }
+
+      if (currentChunk.length > 0) {
+        chunks.push({
+          text: currentChunk,
+          ref: `${section.title} [${chunkIndex + 1}]`,
+          start_char: chunkStart,
+          end_char: chunkStart + currentChunk.length,
+        });
+        chunkIndex++;
+      }
+    }
+  }
+
+  // Add overlap
+  if (chunkOverlap > 0 && chunks.length > 1) {
+    for (let i = 1; i < chunks.length; i++) {
+      const prevChunk = chunks[i - 1];
+      const overlapText = prevChunk.text.slice(-chunkOverlap);
+      if (overlapText.length > 50) {
+        const lastSpace = overlapText.lastIndexOf(" ");
+        const overlap = lastSpace > 0 ? overlapText.slice(lastSpace + 1) : overlapText;
+        chunks[i].text = `...${overlap} ${chunks[i].text}`;
+      }
+    }
+  }
+
+  return chunks;
+}
+
+// ============================================================================
+// CRON PARSING
+// ============================================================================
+
+function calculateNextRunFromCron(cronExpr: string): Date | null {
+  // Simple cron parser for common patterns
+  // Format: minute hour day month weekday
+  try {
+    const parts = cronExpr.trim().split(/\s+/);
+    if (parts.length !== 5) return null;
+    
+    const [minute, hour] = parts;
+    const now = new Date();
+    const next = new Date(now);
+    
+    // Set time based on cron
+    if (hour !== "*") {
+      next.setHours(parseInt(hour, 10));
+    }
+    if (minute !== "*") {
+      next.setMinutes(parseInt(minute, 10));
+    }
+    next.setSeconds(0);
+    next.setMilliseconds(0);
+    
+    // If next time is in the past, add 1 day
+    if (next <= now) {
+      next.setDate(next.getDate() + 1);
+    }
+    
+    return next;
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
 
@@ -422,6 +643,234 @@ function createResponse(data: unknown, status = 200): Response {
 
 function errorResponse(message: string, status = 400): Response {
   return createResponse({ error: message }, status);
+}
+
+function generateDocId(url: string, sourceName: string): string {
+  try {
+    const urlObj = new URL(url);
+    const path = urlObj.pathname.replace(/\//g, "_").replace(/^_|_$/g, "");
+    return `${sourceName.toLowerCase().replace(/\s+/g, "_")}_${path || "index"}`;
+  } catch {
+    return `${sourceName.toLowerCase().replace(/\s+/g, "_")}_${Date.now()}`;
+  }
+}
+
+// ============================================================================
+// SCRAPE SOURCE FUNCTION
+// ============================================================================
+
+async function scrapeSource(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  source: DataSource
+): Promise<ScrapeResult> {
+  const startTime = Date.now();
+  const result: ScrapeResult = {
+    source_id: source.id,
+    source_name: source.name,
+    pages: [],
+    chunks_created: 0,
+    errors: [],
+    duration_ms: 0,
+    status: "success",
+  };
+
+  // Create scrape log entry (scrape_logs table may not be in generated types yet)
+  const { data: scrapeLog, error: logError } = await supabase
+    .from("scrape_logs")
+    .insert({
+      source_id: source.id,
+      status: "running",
+      started_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+
+  if (logError) {
+    console.error(`[auto-scraper] Failed to create scrape log:`, logError);
+  }
+
+  const scrapeLogId = (scrapeLog as { id?: string } | null)?.id;
+
+  try {
+    console.log(`[auto-scraper] Starting scrape for ${source.name} (${source.url})`);
+
+    // Initialize and run scraper
+    const scraper = new WebScraper(
+      source.url,
+      source.scrape_config,
+      source.base_url || undefined
+    );
+
+    const scrapeResult = await scraper.scrape();
+    result.pages = scrapeResult.pages;
+    result.errors = scrapeResult.errors;
+
+    console.log(`[auto-scraper] Scraped ${scrapeResult.pages.length} pages from ${source.name}`);
+
+    // Process each page: chunk and insert into kb_chunks
+    const chunkSize = source.scrape_config.chunk_size || 1000;
+    const chunkOverlap = source.scrape_config.chunk_overlap || 200;
+    const chunkRecords: Array<{
+      source: string;
+      doc_id: string;
+      ref: string;
+      text: string;
+      version_label: string;
+      source_url: string;
+      metadata: Record<string, unknown>;
+    }> = [];
+
+    for (const page of scrapeResult.pages) {
+      const docId = generateDocId(page.url, source.name);
+      const chunks = chunkText(page.content, docId, page.title || page.ref, chunkSize, chunkOverlap);
+
+      for (const chunk of chunks) {
+        chunkRecords.push({
+          source: source.kb_source,
+          doc_id: docId,
+          ref: chunk.ref,
+          text: chunk.text,
+          version_label: source.version_label,
+          source_url: page.url,
+          metadata: {
+            title: page.title,
+            scraped_at: page.scraped_at,
+            source_name: source.name,
+            page_ref: page.ref,
+          },
+        });
+      }
+    }
+
+    // Batch insert chunks (in batches of 100)
+    if (chunkRecords.length > 0) {
+      console.log(`[auto-scraper] Inserting ${chunkRecords.length} chunks for ${source.name}`);
+      
+      const batchSize = 100;
+      for (let i = 0; i < chunkRecords.length; i += batchSize) {
+        const batch = chunkRecords.slice(i, i + batchSize);
+        const { error: insertError } = await supabase
+          .from("kb_chunks")
+          .insert(batch);
+
+        if (insertError) {
+          console.error(`[auto-scraper] Error inserting chunks batch:`, insertError);
+          result.errors.push({ url: "batch_insert", error: insertError.message });
+        } else {
+          result.chunks_created += batch.length;
+        }
+      }
+    }
+
+    // Determine final status
+    if (scrapeResult.pages.length === 0) {
+      result.status = "error";
+    } else if (scrapeResult.errors.length > 0) {
+      result.status = "partial";
+    } else {
+      result.status = "success";
+    }
+
+    // Calculate next run time if cron is set
+    let nextScrapeAt: string | null = null;
+    if (source.schedule_cron) {
+      const nextRun = calculateNextRunFromCron(source.schedule_cron);
+      if (nextRun) {
+        nextScrapeAt = nextRun.toISOString();
+      }
+    }
+
+    // Update data_sources with results
+    const { error: updateError } = await supabase
+      .from("data_sources")
+      .update({
+        last_scrape_at: new Date().toISOString(),
+        next_scrape_at: nextScrapeAt,
+        status: result.status === "error" ? "error" : "active",
+        error_message: result.status === "error" ? "No pages scraped" : null,
+        error_count: result.status === "error" ? source.error_count + 1 : 0,
+        stats: {
+          total_pages: scrapeResult.pages.length,
+          total_chunks: result.chunks_created,
+          last_scrape_errors: scrapeResult.errors.length,
+        },
+      })
+      .eq("id", source.id);
+
+    if (updateError) {
+      console.error(`[auto-scraper] Error updating data_source:`, updateError);
+    }
+
+    // Update scrape log
+    if (scrapeLogId) {
+      await supabase
+        .from("scrape_logs")
+        .update({
+          completed_at: new Date().toISOString(),
+          status: result.status,
+          pages_scraped: scrapeResult.pages.length,
+          chunks_created: result.chunks_created,
+          errors_count: scrapeResult.errors.length,
+          details: {
+            errors: scrapeResult.errors.slice(0, 20), // Limit stored errors
+            pages_urls: scrapeResult.pages.map(p => p.url).slice(0, 100),
+          },
+        })
+        .eq("id", scrapeLogId);
+    }
+
+    // Trigger embedding generation in background (fire and forget)
+    if (result.chunks_created > 0) {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      
+      fetch(`${supabaseUrl}/functions/v1/generate-embeddings`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${supabaseServiceKey}`,
+        },
+        body: JSON.stringify({ batch_size: 50 }),
+      }).catch(err => {
+        console.error(`[auto-scraper] Failed to trigger embeddings:`, err);
+      });
+      
+      console.log(`[auto-scraper] Triggered embedding generation for new chunks`);
+    }
+
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[auto-scraper] Error scraping ${source.name}:`, errMsg);
+    
+    result.status = "error";
+    result.errors.push({ url: source.url, error: errMsg });
+
+    // Update scrape log with error
+    if (scrapeLogId) {
+      await supabase
+        .from("scrape_logs")
+        .update({
+          completed_at: new Date().toISOString(),
+          status: "error",
+          error_message: errMsg,
+        })
+        .eq("id", scrapeLogId);
+    }
+
+    // Update data_source error count
+    await supabase
+      .from("data_sources")
+      .update({
+        status: "error",
+        error_message: errMsg,
+        error_count: source.error_count + 1,
+      })
+      .eq("id", source.id);
+  }
+
+  result.duration_ms = Date.now() - startTime;
+  return result;
 }
 
 // ============================================================================
@@ -512,31 +961,47 @@ serve(async (req: Request) => {
       return errorResponse("Provide either source_id or run_scheduled=true", 400);
     }
 
-    // Placeholder for scraping results
-    const results: ScrapeResult[] = [];
-
-    // TODO: Implement actual scraping logic for each source
-    for (const source of sources) {
-      console.log(`[auto-scraper] Would scrape source: ${source.name} (${source.url})`);
-      
-      // Placeholder result
-      results.push({
-        source_id: source.id,
-        source_name: source.name,
-        pages: [],
-        chunks_created: 0,
-        errors: [],
-        duration_ms: 0,
-        status: "success",
+    if (sources.length === 0) {
+      return createResponse({
+        success: true,
+        message: "No sources to scrape",
+        sources_count: 0,
+        results: [],
       });
+    }
+
+    // Scrape each source
+    const results: ScrapeResult[] = [];
+    let totalPages = 0;
+    let totalChunks = 0;
+    let totalErrors = 0;
+
+    for (const source of sources) {
+      console.log(`[auto-scraper] Processing source: ${source.name}`);
+      
+      const result = await scrapeSource(supabase, source);
+      results.push(result);
+      
+      totalPages += result.pages.length;
+      totalChunks += result.chunks_created;
+      totalErrors += result.errors.length;
     }
 
     return createResponse({
       success: true,
       sources_count: sources.length,
-      sources: sources.map(s => ({ id: s.id, name: s.name, url: s.url, status: s.status })),
-      results,
-      message: "Scraping structure ready - logic not yet implemented",
+      total_pages: totalPages,
+      total_chunks: totalChunks,
+      total_errors: totalErrors,
+      results: results.map(r => ({
+        source_id: r.source_id,
+        source_name: r.source_name,
+        status: r.status,
+        pages_count: r.pages.length,
+        chunks_created: r.chunks_created,
+        errors_count: r.errors.length,
+        duration_ms: r.duration_ms,
+      })),
     });
 
   } catch (error) {

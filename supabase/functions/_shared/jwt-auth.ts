@@ -43,10 +43,11 @@ export async function validateCustomJwt(authHeader: string | null): Promise<JwtP
   }
 
   const token = authHeader.replace("Bearer ", "");
-  const jwtSecret = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  // Use dedicated JWT secret (fallback to service key for backward compatibility)
+  const jwtSecret = Deno.env.get("CUSTOM_JWT_SECRET") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   
   if (!jwtSecret) {
-    logger.error("[jwt-auth] SUPABASE_SERVICE_ROLE_KEY not configured");
+    logger.error("[jwt-auth] JWT secret not configured (CUSTOM_JWT_SECRET or SUPABASE_SERVICE_ROLE_KEY)");
     return null;
   }
 

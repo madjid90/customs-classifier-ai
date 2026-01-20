@@ -96,6 +96,9 @@ export interface EvidenceItem {
   doc_id: string;
   ref: string;         // Max 100 chars
   excerpt: string;     // Max 300 chars - NEVER fabricated
+  source_url?: string; // URL vers le document original
+  page_number?: number; // Numéro de page si PDF
+  external?: boolean;  // true si source externe, false si base interne
 }
 
 export interface QuestionOption {

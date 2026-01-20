@@ -117,6 +117,9 @@ interface Evidence {
   ref: string;
   excerpt: string;
   similarity: number;
+  source_url?: string;  // URL vers le document original
+  page_number?: number; // Numéro de page si PDF
+  external?: boolean;   // true si source externe, false si base interne
 }
 
 // ETAPE 4/5 - Résultat final

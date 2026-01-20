@@ -39,11 +39,32 @@ export const ALLOWED_ORIGINS = isDevelopment
   : PRODUCTION_ORIGINS;
 
 // ============================================================================
+// SECURITY HEADERS
+// ============================================================================
+
+/**
+ * Security headers to protect against common web vulnerabilities:
+ * - X-Content-Type-Options: Prevents MIME type sniffing
+ * - X-Frame-Options: Prevents clickjacking attacks
+ * - X-XSS-Protection: Enables browser XSS filtering
+ * - Referrer-Policy: Controls referrer information sent with requests
+ * - Content-Security-Policy: Restricts resource loading (API responses)
+ */
+export const securityHeaders: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "X-XSS-Protection": "1; mode=block",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+};
+
+// ============================================================================
 // CORS HEADERS
 // ============================================================================
 
-// Default CORS headers
+// Default CORS headers (includes security headers)
 export const corsHeaders: Record<string, string> = {
+  ...securityHeaders,
   "Access-Control-Allow-Origin": ALLOWED_ORIGINS[0] || "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",

@@ -8,6 +8,10 @@ import {
   isAdmin as checkIsAdmin,
   createServiceClient,
 } from "../_shared/auth.ts";
+import { 
+  searchExternalCustomsSources,
+  type ExternalSearchResult,
+} from "../_shared/external-search.ts";
 import {
   ClassifyRequestSchema,
   validateInput,
@@ -46,6 +50,7 @@ function getOpenAIConfig() {
 const CLASSIFY_TIMEOUT_MS = 25000; // 25 secondes (marge avant 30s Supabase)
 const EXTRACTION_TIMEOUT_MS = 10000; // 10s pour extraction vision
 const EMBEDDING_TIMEOUT_MS = 5000; // 5s pour embedding
+const EXTERNAL_SEARCH_TIMEOUT_MS = 10000; // 10s pour recherche externe
 const DECISION_TIMEOUT_MS = 12000; // 12s pour décision
 
 class TimeoutError extends Error {
@@ -810,7 +815,70 @@ async function searchEvidenceRAG(
   }
 
   // ============================================
-  // PARTIE E : Tri et déduplication finale
+  // PARTIE E : RECHERCHE EXTERNE SI INSUFFISANT
+  // ============================================
+  
+  if (allEvidence.length < 3) {
+    console.warn(`[RAG] ⚠️ Seulement ${allEvidence.length} preuves internes trouvées, lancement recherche externe...`);
+    
+    try {
+      // Construire query pour recherche externe
+      const externalQuery = [
+        profile.product_name,
+        ...candidates.slice(0, 3).map(c => c.code_6),
+      ].filter(Boolean).join(" ");
+      
+      console.log(`[RAG] Recherche externe: "${externalQuery.substring(0, 80)}..."`);
+      
+      // Appel avec timeout de 10 secondes max
+      const externalResults = await withTimeout(
+        searchExternalCustomsSources(externalQuery, {
+          maxResults: 10,
+          language: "fr",
+        }),
+        EXTERNAL_SEARCH_TIMEOUT_MS,
+        "recherche externe customs"
+      );
+      
+      if (externalResults && externalResults.length > 0) {
+        console.log(`[RAG] ✅ ${externalResults.length} résultats externes trouvés`);
+        
+        const timestamp = Date.now();
+        
+        for (const result of externalResults) {
+          // Mapper source externe vers notre type
+          let mappedSource: Evidence["source"] = "maroc";
+          if (result.source === "omd") mappedSource = "omd";
+          else if (result.source === "eu_taric") mappedSource = "omd"; // EU TARIC -> omd
+          else if (result.source === "adii") mappedSource = "maroc";
+          
+          allEvidence.push({
+            source: mappedSource,
+            doc_id: `external_${result.source}_${timestamp}`,
+            ref: result.title,
+            excerpt: result.excerpt.slice(0, 600),
+            source_url: result.source_url,
+            external: true,
+            similarity: result.confidence,
+          });
+        }
+        
+        console.log(`[RAG] Total après externe: ${allEvidence.length} preuves`);
+      } else {
+        console.log(`[RAG] Recherche externe: aucun résultat`);
+      }
+    } catch (externalError) {
+      if (externalError instanceof TimeoutError) {
+        console.warn(`[RAG] ⚠️ Recherche externe timeout (${EXTERNAL_SEARCH_TIMEOUT_MS}ms)`);
+      } else {
+        console.error(`[RAG] Erreur recherche externe:`, externalError);
+      }
+      // Continuer sans les résultats externes
+    }
+  }
+
+  // ============================================
+  // PARTIE F : Tri et déduplication finale
   // ============================================
   
   // Trier par similarité décroissante
@@ -819,10 +887,12 @@ async function searchEvidenceRAG(
   // Limiter et diversifier les sources
   const finalEvidence: Evidence[] = [];
   const sourceCount: Record<string, number> = {};
+  const externalCount = { total: 0 };
   const maxPerSource = Math.ceil(limit / 3);
 
   for (const e of allEvidence) {
     sourceCount[e.source] = (sourceCount[e.source] || 0) + 1;
+    if (e.external) externalCount.total++;
     
     // Limiter par source pour diversité
     if (sourceCount[e.source] <= maxPerSource) {
@@ -836,7 +906,8 @@ async function searchEvidenceRAG(
   const sourceStats = Object.entries(sourceCount)
     .map(([s, c]) => `${s}=${c}`)
     .join(", ");
-  console.log(`[RAG] Evidence finale: ${finalEvidence.length} extraits (${sourceStats})`);
+  const externalStats = externalCount.total > 0 ? ` (${externalCount.total} externes)` : "";
+  console.log(`[RAG] Evidence finale: ${finalEvidence.length} extraits (${sourceStats})${externalStats}`);
 
   return finalEvidence;
 }

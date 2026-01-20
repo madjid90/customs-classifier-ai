@@ -75,6 +75,8 @@ export function KBImport() {
   const [manualDocId, setManualDocId] = useState("");
   const [manualRefPrefix, setManualRefPrefix] = useState("");
   const [manualSourceUrl, setManualSourceUrl] = useState("");
+  const [globalSourceUrl, setGlobalSourceUrl] = useState("");
+  const [globalSourceUrlError, setGlobalSourceUrlError] = useState("");
   const [chunkSize, setChunkSize] = useState(1000);
   const [chunkOverlap, setChunkOverlap] = useState(200);
   const [clearExisting, setClearExisting] = useState(false);
@@ -91,6 +93,22 @@ export function KBImport() {
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractedChunks, setExtractedChunks] = useState<ExtractedKBChunk[]>([]);
   const [extractionStats, setExtractionStats] = useState<{ valid: number; invalid: number } | null>(null);
+
+  // Validate URL format
+  const isValidUrl = (url: string): boolean => {
+    if (!url.trim()) return true; // Empty is valid (optional)
+    return url.startsWith("http://") || url.startsWith("https://");
+  };
+
+  // Handle global source URL change with validation
+  const handleGlobalSourceUrlChange = (url: string) => {
+    setGlobalSourceUrl(url);
+    if (url.trim() && !isValidUrl(url)) {
+      setGlobalSourceUrlError("L'URL doit commencer par http:// ou https://");
+    } else {
+      setGlobalSourceUrlError("");
+    }
+  };
 
   // File upload handler
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -119,6 +137,7 @@ export function KBImport() {
                   title: item.title,
                   content: item.content,
                   ref_prefix: item.ref_prefix,
+                  source_url: item.source_url,
                 });
               }
             }
@@ -185,14 +204,26 @@ export function KBImport() {
       return;
     }
 
+    // Validate global source URL if provided
+    if (globalSourceUrl.trim() && !isValidUrl(globalSourceUrl)) {
+      toast.error("URL source invalide - doit commencer par http:// ou https://");
+      return;
+    }
+
     setIsImporting(true);
     setImportProgress(10);
 
     try {
+      // Apply global source URL to documents that don't have one
+      const docsWithSourceUrl = documents.map(doc => ({
+        ...doc,
+        source_url: doc.source_url || (globalSourceUrl.trim() || undefined),
+      }));
+
       const result = await importKBDocuments({
         source,
         version_label: versionLabel,
-        documents,
+        documents: docsWithSourceUrl,
         chunk_size: chunkSize,
         chunk_overlap: chunkOverlap,
         clear_existing: clearExisting,
@@ -203,6 +234,7 @@ export function KBImport() {
       if (result.success) {
         toast.success(`Import réussi: ${result.total_chunks_created} chunks créés`);
         setDocuments([]);
+        setGlobalSourceUrl("");
         loadStats();
       } else {
         toast.warning(`Import partiel: ${result.total_chunks_created} chunks, ${result.errors.length} erreurs`);
@@ -598,15 +630,34 @@ export function KBImport() {
             </Card>
           )}
 
-          {/* Import Button */}
+          {/* Source URL & Import Button */}
           <Card>
-            <CardContent className="pt-6">
+            <CardContent className="pt-6 space-y-4">
+              <div className="space-y-2">
+                <Label>URL source du document (optionnel)</Label>
+                <Input
+                  value={globalSourceUrl}
+                  onChange={(e) => handleGlobalSourceUrlChange(e.target.value)}
+                  placeholder="ex: https://douane.gov.ma/nomenclature-2024.pdf"
+                  type="url"
+                  className={globalSourceUrlError ? "border-destructive" : ""}
+                />
+                {globalSourceUrlError ? (
+                  <p className="text-xs text-destructive">{globalSourceUrlError}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Optionnel - URL officielle du document (ex: lien vers le PDF sur douane.gov.ma). 
+                    Sera appliquée à tous les documents qui n'ont pas déjà une URL source.
+                  </p>
+                )}
+              </div>
+
               {isImporting && (
-                <Progress value={importProgress} className="mb-4" />
+                <Progress value={importProgress} />
               )}
               <Button
                 onClick={handleImport}
-                disabled={documents.length === 0 || isImporting}
+                disabled={documents.length === 0 || isImporting || !!globalSourceUrlError}
                 className="w-full"
                 size="lg"
               >

@@ -598,22 +598,73 @@ export default function ResultPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {result.evidence.map((ev: EvidenceItem, index: number) => (
-                      <div key={index} className="rounded-lg border p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <FileText className="h-4 w-4 text-accent" />
-                          <span className="text-sm font-medium">
-                            {INGESTION_SOURCE_LABELS[ev.source] || ev.source}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            {ev.ref}
-                          </span>
+                    {result.evidence.map((ev: EvidenceItem, index: number) => {
+                      const handleCopyCitation = () => {
+                        const citationText = `Source: ${INGESTION_SOURCE_LABELS[ev.source] || ev.source}, Référence: ${ev.ref}${ev.source_url ? `, URL: ${ev.source_url}` : ""}${ev.page_number ? `, Page: ${ev.page_number}` : ""}, Extrait: "${ev.excerpt}"`;
+                        navigator.clipboard.writeText(citationText);
+                        toast({
+                          title: "Citation copiée",
+                          description: "La citation a été copiée dans le presse-papiers.",
+                        });
+                      };
+
+                      return (
+                        <div key={index} className="rounded-lg border p-4">
+                          <div className="flex items-center flex-wrap gap-2 mb-2">
+                            <FileText className="h-4 w-4 text-accent" />
+                            <span className="text-sm font-medium">
+                              {INGESTION_SOURCE_LABELS[ev.source] || ev.source}
+                            </span>
+                            
+                            {/* Référence avec lien cliquable si source_url existe */}
+                            {ev.source_url ? (
+                              <a
+                                href={ev.source_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                              >
+                                {ev.ref}
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">
+                                {ev.ref}
+                              </span>
+                            )}
+                            
+                            {/* Numéro de page si disponible */}
+                            {ev.page_number && (
+                              <span className="text-xs text-muted-foreground">
+                                (page {ev.page_number})
+                              </span>
+                            )}
+                            
+                            {/* Badge source externe */}
+                            {ev.external && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400">
+                                Source externe
+                              </span>
+                            )}
+                          </div>
+                          
+                          <p className="text-sm text-muted-foreground italic mb-3">
+                            "{ev.excerpt}"
+                          </p>
+                          
+                          {/* Bouton copier citation */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleCopyCitation}
+                            className="h-7 text-xs"
+                          >
+                            <Copy className="mr-1 h-3 w-3" />
+                            Copier citation
+                          </Button>
                         </div>
-                        <p className="text-sm text-muted-foreground italic">
-                          "{ev.excerpt}"
-                        </p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>

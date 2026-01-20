@@ -701,8 +701,11 @@ export type Database = {
           embedding: string | null
           id: string
           metadata: Json | null
+          page_number: number | null
           ref: string
+          section_path: string | null
           source: Database["public"]["Enums"]["ingestion_source"]
+          source_url: string | null
           text: string
           version_label: string
         }
@@ -712,8 +715,11 @@ export type Database = {
           embedding?: string | null
           id?: string
           metadata?: Json | null
+          page_number?: number | null
           ref: string
+          section_path?: string | null
           source: Database["public"]["Enums"]["ingestion_source"]
+          source_url?: string | null
           text: string
           version_label: string
         }
@@ -723,8 +729,11 @@ export type Database = {
           embedding?: string | null
           id?: string
           metadata?: Json | null
+          page_number?: number | null
           ref?: string
+          section_path?: string | null
           source?: Database["public"]["Enums"]["ingestion_source"]
+          source_url?: string | null
           text?: string
           version_label?: string
         }

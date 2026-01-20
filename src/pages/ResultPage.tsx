@@ -595,10 +595,23 @@ export default function ResultPage() {
                   <CardDescription>
                     Documents justifiant la classification
                   </CardDescription>
+                  {/* Légende des sources */}
+                  <div className="flex flex-wrap items-center gap-4 mt-3 text-xs text-muted-foreground">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block w-2 h-2 rounded-full bg-green-500"></span>
+                      📚 Sources internes = vérifiées
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block w-2 h-2 rounded-full bg-orange-500"></span>
+                      🌐 Sources externes = à vérifier
+                    </span>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
                     {result.evidence.map((ev: EvidenceItem, index: number) => {
+                      const isExternal = ev.external === true;
+                      
                       const handleCopyCitation = () => {
                         const citationText = `Source: ${INGESTION_SOURCE_LABELS[ev.source] || ev.source}, Référence: ${ev.ref}${ev.source_url ? `, URL: ${ev.source_url}` : ""}${ev.page_number ? `, Page: ${ev.page_number}` : ""}, Extrait: "${ev.excerpt}"`;
                         navigator.clipboard.writeText(citationText);
@@ -609,12 +622,30 @@ export default function ResultPage() {
                       };
 
                       return (
-                        <div key={index} className="rounded-lg border p-4">
+                        <div 
+                          key={index} 
+                          className={`rounded-lg border p-4 ${
+                            isExternal 
+                              ? "border-orange-200 bg-orange-50/50 dark:border-orange-800/50 dark:bg-orange-950/20" 
+                              : "border-border bg-background"
+                          }`}
+                        >
                           <div className="flex items-center flex-wrap gap-2 mb-2">
-                            <FileText className="h-4 w-4 text-accent" />
+                            <FileText className={`h-4 w-4 ${isExternal ? "text-orange-500" : "text-accent"}`} />
                             <span className="text-sm font-medium">
                               {INGESTION_SOURCE_LABELS[ev.source] || ev.source}
                             </span>
+                            
+                            {/* Badge source type */}
+                            {isExternal ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400">
+                                🌐 Source externe
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                                📚 Base interne
+                              </span>
+                            )}
                             
                             {/* Référence avec lien cliquable si source_url existe */}
                             {ev.source_url ? (
@@ -639,18 +670,19 @@ export default function ResultPage() {
                                 (page {ev.page_number})
                               </span>
                             )}
-                            
-                            {/* Badge source externe */}
-                            {ev.external && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400">
-                                Source externe
-                              </span>
-                            )}
                           </div>
                           
                           <p className="text-sm text-muted-foreground italic mb-3">
                             "{ev.excerpt}"
                           </p>
+                          
+                          {/* Note de vérification pour sources externes */}
+                          {isExternal && (
+                            <p className="text-xs text-orange-600 dark:text-orange-400 mb-2 flex items-center gap-1">
+                              <AlertTriangle className="h-3 w-3" />
+                              Résultat trouvé via recherche web - vérifiez la source originale
+                            </p>
+                          )}
                           
                           {/* Bouton copier citation */}
                           <Button

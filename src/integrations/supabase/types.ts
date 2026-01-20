@@ -322,6 +322,72 @@ export type Database = {
         }
         Relationships: []
       }
+      data_sources: {
+        Row: {
+          base_url: string | null
+          created_at: string
+          created_by: string
+          description: string | null
+          error_count: number
+          error_message: string | null
+          id: string
+          kb_source: Database["public"]["Enums"]["ingestion_source"]
+          last_scrape_at: string | null
+          name: string
+          next_scrape_at: string | null
+          schedule_cron: string | null
+          scrape_config: Json
+          source_type: Database["public"]["Enums"]["data_source_type"]
+          stats: Json
+          status: Database["public"]["Enums"]["data_source_status"]
+          updated_at: string
+          url: string
+          version_label: string
+        }
+        Insert: {
+          base_url?: string | null
+          created_at?: string
+          created_by: string
+          description?: string | null
+          error_count?: number
+          error_message?: string | null
+          id?: string
+          kb_source: Database["public"]["Enums"]["ingestion_source"]
+          last_scrape_at?: string | null
+          name: string
+          next_scrape_at?: string | null
+          schedule_cron?: string | null
+          scrape_config?: Json
+          source_type: Database["public"]["Enums"]["data_source_type"]
+          stats?: Json
+          status?: Database["public"]["Enums"]["data_source_status"]
+          updated_at?: string
+          url: string
+          version_label?: string
+        }
+        Update: {
+          base_url?: string | null
+          created_at?: string
+          created_by?: string
+          description?: string | null
+          error_count?: number
+          error_message?: string | null
+          id?: string
+          kb_source?: Database["public"]["Enums"]["ingestion_source"]
+          last_scrape_at?: string | null
+          name?: string
+          next_scrape_at?: string | null
+          schedule_cron?: string | null
+          scrape_config?: Json
+          source_type?: Database["public"]["Enums"]["data_source_type"]
+          stats?: Json
+          status?: Database["public"]["Enums"]["data_source_status"]
+          updated_at?: string
+          url?: string
+          version_label?: string
+        }
+        Relationships: []
+      }
       dum_records: {
         Row: {
           attachments: Json | null
@@ -1077,6 +1143,8 @@ export type Database = {
       case_status: "IN_PROGRESS" | "RESULT_READY" | "VALIDATED" | "ERROR"
       classify_status: "NEED_INFO" | "DONE" | "ERROR" | "LOW_CONFIDENCE"
       confidence_level: "high" | "medium" | "low"
+      data_source_status: "active" | "paused" | "error" | "disabled"
+      data_source_type: "website" | "api" | "rss" | "pdf_url" | "sitemap"
       evidence_source: "omd" | "maroc" | "lois" | "dum"
       import_export_type: "import" | "export"
       ingestion_log_level: "info" | "warning" | "error"
@@ -1243,6 +1311,8 @@ export const Constants = {
       case_status: ["IN_PROGRESS", "RESULT_READY", "VALIDATED", "ERROR"],
       classify_status: ["NEED_INFO", "DONE", "ERROR", "LOW_CONFIDENCE"],
       confidence_level: ["high", "medium", "low"],
+      data_source_status: ["active", "paused", "error", "disabled"],
+      data_source_type: ["website", "api", "rss", "pdf_url", "sitemap"],
       evidence_source: ["omd", "maroc", "lois", "dum"],
       import_export_type: ["import", "export"],
       ingestion_log_level: ["info", "warning", "error"],

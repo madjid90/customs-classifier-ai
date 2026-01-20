@@ -326,7 +326,7 @@ export type Database = {
         Row: {
           base_url: string | null
           created_at: string
-          created_by: string
+          created_by: string | null
           description: string | null
           error_count: number
           error_message: string | null
@@ -347,7 +347,7 @@ export type Database = {
         Insert: {
           base_url?: string | null
           created_at?: string
-          created_by: string
+          created_by?: string | null
           description?: string | null
           error_count?: number
           error_message?: string | null
@@ -368,7 +368,7 @@ export type Database = {
         Update: {
           base_url?: string | null
           created_at?: string
-          created_by?: string
+          created_by?: string | null
           description?: string | null
           error_count?: number
           error_message?: string | null

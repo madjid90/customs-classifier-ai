@@ -7,6 +7,8 @@ export interface DocumentInput {
   title?: string;
   content: string;
   ref_prefix?: string;
+  source_url?: string;   // URL du document original
+  page_number?: number;  // Numéro de page si applicable
 }
 
 export interface ImportKBRequest {

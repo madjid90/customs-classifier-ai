@@ -173,8 +173,8 @@ Deno.serve(async (req) => {
     // Get user role using centralized auth module
     const userRole = await getUserRole(userId);
 
-    // Generate JWT token
-    const jwtSecret = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    // Generate JWT token using dedicated secret (fallback to service key for backward compatibility)
+    const jwtSecret = Deno.env.get("CUSTOM_JWT_SECRET") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const secretKey = new TextEncoder().encode(jwtSecret);
     
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours

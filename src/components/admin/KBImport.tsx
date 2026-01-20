@@ -74,6 +74,7 @@ export function KBImport() {
   const [manualContent, setManualContent] = useState("");
   const [manualDocId, setManualDocId] = useState("");
   const [manualRefPrefix, setManualRefPrefix] = useState("");
+  const [manualSourceUrl, setManualSourceUrl] = useState("");
   const [chunkSize, setChunkSize] = useState(1000);
   const [chunkOverlap, setChunkOverlap] = useState(200);
   const [clearExisting, setClearExisting] = useState(false);
@@ -162,11 +163,13 @@ export function KBImport() {
       doc_id: manualDocId.trim(),
       content: manualContent.trim(),
       ref_prefix: manualRefPrefix.trim() || undefined,
+      source_url: manualSourceUrl.trim() || undefined,
     }]);
     
     setManualDocId("");
     setManualContent("");
     setManualRefPrefix("");
+    setManualSourceUrl("");
     toast.success("Document ajouté");
   };
 
@@ -510,6 +513,18 @@ export function KBImport() {
                 </div>
               </div>
               <div className="space-y-2">
+                <Label>URL source (optionnel)</Label>
+                <Input
+                  value={manualSourceUrl}
+                  onChange={(e) => setManualSourceUrl(e.target.value)}
+                  placeholder="ex: https://douane.gov.ma/document.pdf"
+                  type="url"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Lien vers le document officiel pour traçabilité
+                </p>
+              </div>
+              <div className="space-y-2">
                 <Label>Contenu *</Label>
                 <Textarea
                   value={manualContent}
@@ -553,9 +568,21 @@ export function KBImport() {
                         <p className="text-sm text-muted-foreground truncate">
                           {doc.content.slice(0, 100)}...
                         </p>
-                        <p className="text-xs text-muted-foreground">
-                          {doc.content.length} caractères
-                        </p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-xs text-muted-foreground">
+                            {doc.content.length} caractères
+                          </span>
+                          {doc.source_url && (
+                            <a
+                              href={doc.source_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-primary hover:underline flex items-center gap-1"
+                            >
+                              🔗 Source
+                            </a>
+                          )}
+                        </div>
                       </div>
                       <Button
                         variant="ghost"

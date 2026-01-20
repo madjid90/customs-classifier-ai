@@ -28,6 +28,8 @@ interface DocumentInput {
   title?: string;
   content: string;
   ref_prefix?: string;
+  source_url?: string;   // URL du document original
+  page_number?: number;  // Numéro de page si applicable
 }
 
 interface ChunkResult {
@@ -423,6 +425,8 @@ async function importOMDNotes(
         ref: chunk.ref,
         text: chunk.text,
         version_label: versionLabel,
+        source_url: doc.source_url || null,
+        page_number: doc.page_number || null,
       }));
 
       const { error: insertError } = await supabase
@@ -484,6 +488,8 @@ async function importFinanceLaws(
         ref: chunk.ref,
         text: chunk.text,
         version_label: versionLabel,
+        source_url: doc.source_url || null,
+        page_number: doc.page_number || null,
       }));
 
       const { error: insertError } = await supabase
@@ -555,6 +561,8 @@ async function importMarocTariff(
         ref: chunk.ref,
         text: chunk.text,
         version_label: versionLabel,
+        source_url: doc.source_url || null,
+        page_number: doc.page_number || null,
       }));
 
       const { error: insertError } = await supabase

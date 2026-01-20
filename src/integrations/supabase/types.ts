@@ -894,6 +894,56 @@ export type Database = {
         }
         Relationships: []
       }
+      scrape_logs: {
+        Row: {
+          chunks_created: number
+          completed_at: string | null
+          created_at: string
+          details: Json
+          error_message: string | null
+          errors_count: number
+          id: string
+          pages_scraped: number
+          source_id: string
+          started_at: string
+          status: string
+        }
+        Insert: {
+          chunks_created?: number
+          completed_at?: string | null
+          created_at?: string
+          details?: Json
+          error_message?: string | null
+          errors_count?: number
+          id?: string
+          pages_scraped?: number
+          source_id: string
+          started_at?: string
+          status?: string
+        }
+        Update: {
+          chunks_created?: number
+          completed_at?: string | null
+          created_at?: string
+          details?: Json
+          error_message?: string | null
+          errors_count?: number
+          id?: string
+          pages_scraped?: number
+          source_id?: string
+          started_at?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scrape_logs_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       security_logs: {
         Row: {
           attempted_path: string

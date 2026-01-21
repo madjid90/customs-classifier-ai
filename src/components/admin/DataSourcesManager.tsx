@@ -54,6 +54,7 @@ import {
   Server,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { format, formatDistanceToNow } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -190,6 +191,7 @@ const defaultFormData: FormData = {
 
 export function DataSourcesManager() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [sources, setSources] = useState<DataSource[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [scrapingSourceId, setScrapingSourceId] = useState<string | null>(null);
@@ -265,11 +267,17 @@ export function DataSourcesManager() {
       return;
     }
 
+    if (!user) {
+      toast({
+        title: "Erreur",
+        description: "Non authentifié",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsSaving(true);
     try {
-      const { data: session } = await supabase.auth.getSession();
-      if (!session?.session?.user) throw new Error("Non authentifié");
-
       const scrapeConfig = {
         selectors: {
           content: formData.selectors_content,
@@ -319,7 +327,7 @@ export function DataSourcesManager() {
             schedule_cron: formData.schedule_cron.trim() || null,
             version_label: formData.version_label.trim() || "auto",
             scrape_config: scrapeConfig,
-            created_by: session.session.user.id,
+            created_by: user.id,
             status: "active",
           },
         ]);

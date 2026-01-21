@@ -90,9 +90,12 @@ export function ImportHistory() {
   async function fetchIngestions() {
     try {
       const response = await getIngestionList();
-      setIngestions(response.data.items);
+      // Handle different response structures
+      const items = response.data?.items || response.data || [];
+      setIngestions(Array.isArray(items) ? items : []);
     } catch (err) {
       console.error("Failed to fetch ingestions:", err);
+      setIngestions([]);
     } finally {
       setIsLoading(false);
     }

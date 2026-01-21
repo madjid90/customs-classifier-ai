@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders } from "../_shared/cors.ts";
+import { corsHeaders, getCorsHeaders } from "../_shared/cors.ts";
 import { PhoneSchema, validateRequestBody, normalizePhone } from "../_shared/validation.ts";
 
 // Generate a 6-digit OTP
@@ -61,14 +61,17 @@ async function sendSmsViaTwilio(to: string, message: string): Promise<{ success:
 }
 
 Deno.serve(async (req) => {
+  // Get dynamic CORS headers based on request origin
+  const dynamicCorsHeaders = getCorsHeaders(req);
+
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { headers: dynamicCorsHeaders });
   }
 
   try {
     // Validate request body using centralized schema
-    const validation = await validateRequestBody(req, SendOtpSchema);
+    const validation = await validateRequestBody(req, SendOtpSchema, dynamicCorsHeaders);
     if (!validation.success) {
       return validation.error;
     }
@@ -82,7 +85,7 @@ Deno.serve(async (req) => {
     if (!phoneRegex.test(normalizedPhoneNumber)) {
       return new Response(
         JSON.stringify({ error: "Format de téléphone invalide", code: "INVALID_PHONE" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...dynamicCorsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -103,7 +106,7 @@ Deno.serve(async (req) => {
       logger.warn(`[send-otp] Rate limit exceeded for phone: ${normalizedPhoneNumber}`);
       return new Response(
         JSON.stringify({ error: "Trop de demandes. Veuillez patienter avant de demander un nouveau code.", code: "RATE_LIMITED" }),
-        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 429, headers: { ...dynamicCorsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -131,7 +134,7 @@ Deno.serve(async (req) => {
       logger.error(`[send-otp] Error storing OTP:`, insertError);
       return new Response(
         JSON.stringify({ error: "Échec de génération du code OTP", code: "INTERNAL_ERROR" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 500, headers: { ...dynamicCorsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -150,7 +153,7 @@ Deno.serve(async (req) => {
       
       return new Response(
         JSON.stringify({ error: smsResult.error || "Échec d'envoi du SMS", code: "SMS_FAILED" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 500, headers: { ...dynamicCorsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -162,14 +165,14 @@ Deno.serve(async (req) => {
         ok: true,
         expires_in: 300, // 5 minutes in seconds
       }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 200, headers: { ...dynamicCorsHeaders, "Content-Type": "application/json" } }
     );
 
   } catch (error) {
     logger.error(`[send-otp] Unexpected error:`, error);
     return new Response(
       JSON.stringify({ error: "Erreur interne du serveur", code: "INTERNAL_ERROR" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...dynamicCorsHeaders, "Content-Type": "application/json" } }
     );
   }
 });

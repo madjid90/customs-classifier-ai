@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +53,7 @@ import {
   Globe,
   FileText,
   Server,
+  Zap,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -84,6 +86,7 @@ interface ScrapeConfig {
   follow_links?: boolean;
   link_pattern?: string;
   min_content_length?: number;
+  use_firecrawl?: boolean;
   api_config?: {
     method?: string;
     headers?: Record<string, string>;
@@ -132,6 +135,7 @@ interface FormData {
   follow_links: boolean;
   link_pattern: string;
   min_content_length: number;
+  use_firecrawl: boolean;
 }
 
 const KB_SOURCE_ICONS: Record<KbSource, string> = {
@@ -194,6 +198,7 @@ const defaultFormData: FormData = {
   follow_links: true,
   link_pattern: "",
   min_content_length: 100,
+  use_firecrawl: false,
 };
 
 export function DataSourcesManager() {
@@ -251,6 +256,7 @@ export function DataSourcesManager() {
         follow_links: source.scrape_config?.follow_links ?? true,
         link_pattern: source.scrape_config?.link_pattern || "",
         min_content_length: source.scrape_config?.min_content_length || 100,
+        use_firecrawl: source.scrape_config?.use_firecrawl ?? false,
       });
     } else {
       setEditingSource(null);
@@ -296,6 +302,7 @@ export function DataSourcesManager() {
         follow_links: formData.follow_links,
         link_pattern: formData.link_pattern || null,
         min_content_length: formData.min_content_length,
+        use_firecrawl: formData.use_firecrawl,
       };
 
       const baseUrl = new URL(formData.url).origin;
@@ -765,6 +772,26 @@ export function DataSourcesManager() {
                     <p className="text-xs text-muted-foreground">
                       Seuls les liens correspondant au pattern seront suivis
                     </p>
+                  </div>
+
+                  {/* Firecrawl Toggle */}
+                  <div className="flex items-center justify-between rounded-lg border p-4 bg-muted/30">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <Zap className="h-4 w-4 text-amber-500" />
+                        <Label htmlFor="use_firecrawl" className="font-medium">
+                          Utiliser Firecrawl
+                        </Label>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Activez pour les sites JavaScript dynamiques (JSF, React, Vue...)
+                      </p>
+                    </div>
+                    <Switch
+                      id="use_firecrawl"
+                      checked={formData.use_firecrawl}
+                      onCheckedChange={(checked) => setFormData((f) => ({ ...f, use_firecrawl: checked }))}
+                    />
                   </div>
                 </div>
               </div>

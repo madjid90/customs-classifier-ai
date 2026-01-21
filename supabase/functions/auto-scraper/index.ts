@@ -72,6 +72,8 @@ interface ScrapeConfig {
     pagination_param?: string;
     data_path?: string;
   };
+  // Firecrawl for JavaScript-heavy sites
+  use_firecrawl?: boolean;
 }
 
 interface ScrapedPage {
@@ -105,7 +107,183 @@ interface QueueItem {
 }
 
 // ============================================================================
-// WEB SCRAPER CLASS
+// FIRECRAWL SCRAPER CLASS
+// ============================================================================
+
+class FirecrawlScraper {
+  private startUrl: string;
+  private config: ScrapeConfig;
+  private baseUrl: string;
+
+  constructor(startUrl: string, config: ScrapeConfig, baseUrl?: string) {
+    this.startUrl = startUrl;
+    this.config = config;
+    const urlObj = new URL(startUrl);
+    this.baseUrl = baseUrl || `${urlObj.protocol}//${urlObj.host}`;
+  }
+
+  private extractRefFromUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      const path = urlObj.pathname;
+      let ref = path
+        .replace(/^\/|\/$/g, "")
+        .replace(/\.(html?|php|aspx?|jsf?)$/i, "")
+        .replace(/\//g, "_");
+      return ref || "index";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  async scrape(): Promise<{ pages: ScrapedPage[]; errors: Array<{ url: string; error: string }> }> {
+    const FIRECRAWL_API_KEY = Deno.env.get("FIRECRAWL_API_KEY");
+    if (!FIRECRAWL_API_KEY) {
+      console.error("[FirecrawlScraper] FIRECRAWL_API_KEY not configured");
+      return {
+        pages: [],
+        errors: [{ url: this.startUrl, error: "Firecrawl API key not configured" }],
+      };
+    }
+
+    const maxPages = this.config.max_pages || 50;
+    const maxDepth = this.config.max_depth || 3;
+    const pages: ScrapedPage[] = [];
+    const errors: Array<{ url: string; error: string }> = [];
+
+    console.log(`[FirecrawlScraper] Starting crawl of ${this.startUrl} with Firecrawl`);
+
+    try {
+      // Use Firecrawl crawl endpoint for multi-page crawling
+      const crawlResponse = await fetch("https://api.firecrawl.dev/v1/crawl", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: this.startUrl,
+          limit: maxPages,
+          maxDepth: maxDepth,
+          scrapeOptions: {
+            formats: ["markdown"],
+            onlyMainContent: true,
+          },
+          includePaths: this.config.link_pattern ? [this.config.link_pattern] : undefined,
+        }),
+      });
+
+      if (!crawlResponse.ok) {
+        const errorData = await crawlResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || `Firecrawl API error: ${crawlResponse.status}`);
+      }
+
+      const crawlData = await crawlResponse.json();
+      
+      // Firecrawl crawl is async, so we get a job ID
+      if (crawlData.id) {
+        console.log(`[FirecrawlScraper] Crawl job started: ${crawlData.id}`);
+        
+        // Poll for completion (max 5 minutes)
+        const maxWait = 5 * 60 * 1000;
+        const pollInterval = 5000;
+        const startTime = Date.now();
+        
+        while (Date.now() - startTime < maxWait) {
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+          
+          const statusResponse = await fetch(`https://api.firecrawl.dev/v1/crawl/${crawlData.id}`, {
+            headers: {
+              "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
+            },
+          });
+          
+          if (!statusResponse.ok) {
+            throw new Error(`Failed to check crawl status: ${statusResponse.status}`);
+          }
+          
+          const statusData = await statusResponse.json();
+          console.log(`[FirecrawlScraper] Crawl status: ${statusData.status}, completed: ${statusData.completed}/${statusData.total}`);
+          
+          if (statusData.status === "completed" || statusData.status === "failed") {
+            if (statusData.data && Array.isArray(statusData.data)) {
+              for (const page of statusData.data) {
+                const pageUrl = page.metadata?.sourceURL || page.url || this.startUrl;
+                pages.push({
+                  url: pageUrl,
+                  title: page.metadata?.title || page.title || "",
+                  content: page.markdown || page.content || "",
+                  ref: this.extractRefFromUrl(pageUrl),
+                  links: page.links || [],
+                  scraped_at: new Date().toISOString(),
+                  metadata: page.metadata,
+                });
+              }
+            }
+            
+            if (statusData.status === "failed") {
+              errors.push({ url: this.startUrl, error: statusData.error || "Crawl failed" });
+            }
+            break;
+          }
+        }
+      } else {
+        // Direct response (shouldn't happen with crawl)
+        console.log(`[FirecrawlScraper] Got direct response from Firecrawl`);
+      }
+
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error(`[FirecrawlScraper] Error: ${errMsg}`);
+      errors.push({ url: this.startUrl, error: errMsg });
+      
+      // Fallback: try single page scrape
+      console.log(`[FirecrawlScraper] Attempting single page scrape fallback...`);
+      try {
+        const scrapeResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            url: this.startUrl,
+            formats: ["markdown", "links"],
+            onlyMainContent: true,
+          }),
+        });
+
+        if (scrapeResponse.ok) {
+          const scrapeData = await scrapeResponse.json();
+          const data = scrapeData.data || scrapeData;
+          
+          if (data.markdown) {
+            pages.push({
+              url: this.startUrl,
+              title: data.metadata?.title || "",
+              content: data.markdown,
+              ref: this.extractRefFromUrl(this.startUrl),
+              links: data.links || [],
+              scraped_at: new Date().toISOString(),
+              metadata: data.metadata,
+            });
+            // Remove the error since we got content
+            errors.pop();
+          }
+        }
+      } catch (fallbackError) {
+        console.error(`[FirecrawlScraper] Fallback scrape also failed:`, fallbackError);
+      }
+    }
+
+    console.log(`[FirecrawlScraper] Completed: ${pages.length} pages scraped, ${errors.length} errors`);
+
+    return { pages, errors };
+  }
+}
+
+// ============================================================================
+// WEB SCRAPER CLASS (Basic HTML)
 // ============================================================================
 
 class WebScraper {
@@ -695,15 +873,28 @@ async function scrapeSource(
 
   try {
     console.log(`[auto-scraper] Starting scrape for ${source.name} (${source.url})`);
+    console.log(`[auto-scraper] Using ${source.scrape_config.use_firecrawl ? 'Firecrawl' : 'basic HTML'} scraper`);
 
-    // Initialize and run scraper
-    const scraper = new WebScraper(
-      source.url,
-      source.scrape_config,
-      source.base_url || undefined
-    );
-
-    const scrapeResult = await scraper.scrape();
+    // Choose scraper based on config
+    let scrapeResult: { pages: ScrapedPage[]; errors: Array<{ url: string; error: string }> };
+    
+    if (source.scrape_config.use_firecrawl) {
+      // Use Firecrawl for JavaScript-heavy sites
+      const firecrawlScraper = new FirecrawlScraper(
+        source.url,
+        source.scrape_config,
+        source.base_url || undefined
+      );
+      scrapeResult = await firecrawlScraper.scrape();
+    } else {
+      // Use basic HTML scraper
+      const scraper = new WebScraper(
+        source.url,
+        source.scrape_config,
+        source.base_url || undefined
+      );
+      scrapeResult = await scraper.scrape();
+    }
     result.pages = scrapeResult.pages;
     result.errors = scrapeResult.errors;
 

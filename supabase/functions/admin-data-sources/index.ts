@@ -34,7 +34,17 @@ serve(async (req: Request) => {
     const supabase = createServiceClient();
     const url = new URL(req.url);
     const pathParts = url.pathname.split("/").filter(Boolean);
-    const sourceId = pathParts.length > 1 ? pathParts[pathParts.length - 1] : null;
+    
+    // Extract source ID: URL format is /functions/v1/admin-data-sources or /functions/v1/admin-data-sources/{id}
+    // pathParts could be ["functions", "v1", "admin-data-sources"] or ["functions", "v1", "admin-data-sources", "{id}"]
+    // or just ["admin-data-sources"] / ["admin-data-sources", "{id}"] depending on runtime
+    let sourceId: string | null = null;
+    const adminFunctionIdx = pathParts.findIndex(p => p === "admin-data-sources");
+    if (adminFunctionIdx !== -1 && pathParts.length > adminFunctionIdx + 1) {
+      sourceId = pathParts[adminFunctionIdx + 1];
+    }
+    
+    logger.info(`[admin-data-sources] Method: ${req.method}, Path: ${url.pathname}, sourceId: ${sourceId}`);
 
     // GET - List all data sources or get one by ID
     if (req.method === "GET") {

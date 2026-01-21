@@ -1,6 +1,6 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authenticateRequest, createServiceClient } from "../_shared/auth.ts";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders } from "../_shared/cors.ts";
+import { getCorsHeaders } from "../_shared/cors.ts";
 
 interface DUMRecord {
   dum_date: string;
@@ -61,18 +61,6 @@ function normalizeCode(code: string): string | null {
 // Parse date from various formats
 function parseDate(dateStr: string): string | null {
   if (!dateStr) return null;
-  
-  // Try different date formats
-  const formats = [
-    // ISO format
-    /^(\d{4})-(\d{2})-(\d{2})$/,
-    // European format DD/MM/YYYY
-    /^(\d{2})\/(\d{2})\/(\d{4})$/,
-    // European format DD-MM-YYYY
-    /^(\d{2})-(\d{2})-(\d{4})$/,
-    // US format MM/DD/YYYY
-    /^(\d{2})\/(\d{2})\/(\d{4})$/,
-  ];
   
   // ISO format
   if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
@@ -185,62 +173,21 @@ function mapRowToDUM(row: Record<string, string>, mapping: ColumnMapping): DUMRe
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = getCorsHeaders(req);
+  
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Verify auth
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ message: "Non authentifie" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Authenticate with custom JWT
+    const authResult = await authenticateRequest(req, { requireRole: ["admin", "manager"] });
+    if (!authResult.success) {
+      return authResult.error;
     }
-
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ message: "Token invalide" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Get user's company
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("company_id")
-      .eq("user_id", user.id)
-      .single();
-
-    if (!profile?.company_id) {
-      return new Response(
-        JSON.stringify({ message: "Profil utilisateur non trouve" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Check role (admin or manager can import)
-    const { data: roleData } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .in("role", ["admin", "manager"])
-      .single();
-
-    if (!roleData) {
-      return new Response(
-        JSON.stringify({ message: "Acces reserve aux administrateurs et managers" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const { profile } = authResult.data;
+    const supabase = createServiceClient();
 
     const url = new URL(req.url);
     const path = url.pathname.replace(/^\/import-dum\/?/, "");
@@ -283,7 +230,7 @@ Deno.serve(async (req) => {
         );
       }
 
-      console.log(`[import-dum] Starting import for company ${profile.company_id}`);
+      logger.info(`[import-dum] Starting import for company ${profile.company_id}`);
       
       let rows: Record<string, string>[] = [];
       
@@ -306,7 +253,7 @@ Deno.serve(async (req) => {
         );
       }
 
-      console.log(`[import-dum] Parsed ${rows.length} rows`);
+      logger.debug(`[import-dum] Parsed ${rows.length} rows`);
 
       const result: ImportResult = {
         total_rows: rows.length,
@@ -369,7 +316,7 @@ Deno.serve(async (req) => {
           .insert(batch);
         
         if (insertError) {
-          console.error(`[import-dum] Batch error:`, insertError);
+          logger.error(`[import-dum] Batch error:`, insertError);
           result.errors += batch.length;
           result.warnings.push(`Erreur batch ${i}: ${insertError.message}`);
         } else {
@@ -377,7 +324,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      console.log(`[import-dum] Import complete:`, result);
+      logger.info(`[import-dum] Import complete:`, result);
 
       return new Response(
         JSON.stringify(result),
@@ -497,7 +444,8 @@ Deno.serve(async (req) => {
     );
 
   } catch (error) {
-    console.error("[import-dum] Error:", error);
+    logger.error("[import-dum] Error:", error);
+    const corsHeaders = getCorsHeaders(req);
     return new Response(
       JSON.stringify({ message: error instanceof Error ? error.message : "Erreur serveur" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

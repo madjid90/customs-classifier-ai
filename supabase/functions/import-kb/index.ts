@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logger } from "../_shared/logger.ts";
 import { corsHeaders, getCorsHeaders } from "../_shared/cors.ts";
+import { authenticateRequest, createServiceClient } from "../_shared/auth.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -593,34 +593,14 @@ serve(async (req) => {
   }
 
   try {
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    
-    // Vérifier auth (admin requis)
-    const authHeader = req.headers.get("Authorization");
-    if (authHeader) {
-      const token = authHeader.replace("Bearer ", "");
-      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-      
-      if (authError || !user) {
-        return new Response(
-          JSON.stringify({ error: "Unauthorized" }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      // Vérifier rôle admin
-      const { data: hasAdmin } = await supabase.rpc("has_role", { 
-        _user_id: user.id, 
-        _role: "admin" 
-      });
-
-      if (!hasAdmin) {
-        return new Response(
-          JSON.stringify({ error: "Admin role required" }),
-          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+    // Authenticate using custom JWT (admin required)
+    const authResult = await authenticateRequest(req, { requireRole: ["admin"] });
+    if (!authResult.success) {
+      return authResult.error;
     }
+
+    // Initialize Supabase client with service role
+    const supabase = createServiceClient();
 
     const body: ImportRequest = await req.json();
     const { 

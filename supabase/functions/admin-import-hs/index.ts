@@ -1,6 +1,6 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authenticateRequest, createServiceClient } from "../_shared/auth.ts";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders, getCorsHeaders } from "../_shared/cors.ts";
+import { getCorsHeaders } from "../_shared/cors.ts";
 
 interface HSCodeRow {
   code_10: string;
@@ -82,43 +82,13 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Verify auth
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ message: "Non authentifie" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Authenticate with custom JWT - admin only
+    const authResult = await authenticateRequest(req, { requireRole: ["admin"] });
+    if (!authResult.success) {
+      return authResult.error;
     }
-
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ message: "Token invalide" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Check admin role
-    const { data: roleData } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .eq("role", "admin")
-      .single();
-
-    if (!roleData) {
-      return new Response(
-        JSON.stringify({ message: "Acces reserve aux administrateurs" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const supabase = createServiceClient();
 
     // Parse request
     const url = new URL(req.url);
@@ -224,6 +194,9 @@ Deno.serve(async (req) => {
       // ========================================================================
       // BACKGROUND TASKS: Auto-trigger embeddings and enrichment after import
       // ========================================================================
+      
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
       
       const runBackgroundTask = (task: () => Promise<void>) => {
         // @ts-ignore - EdgeRuntime disponible dans Deno Deploy
@@ -415,6 +388,7 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     logger.error("[import-hs] Error:", error);
+    const corsHeaders = getCorsHeaders(req);
     return new Response(
       JSON.stringify({ message: error instanceof Error ? error.message : "Erreur serveur" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

@@ -1,6 +1,6 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authenticateRequest, createServiceClient } from "../_shared/auth.ts";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders } from "../_shared/cors.ts";
+import { getCorsHeaders } from "../_shared/cors.ts";
 import {
   validateRequestBody,
   ExtractDataRequestSchema,
@@ -224,48 +224,21 @@ function normalizeDate(dateStr: string): string | null {
 // ============================================================================
 
 Deno.serve(async (req) => {
+  const corsHeaders = getCorsHeaders(req);
+  
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Verify auth
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ message: "Non authentifié" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Authenticate with custom JWT
+    const authResult = await authenticateRequest(req, { requireRole: ["admin", "manager"] });
+    if (!authResult.success) {
+      return authResult.error;
     }
-
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ message: "Token invalide" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Check role (admin or manager)
-    const { data: roleData } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .in("role", ["admin", "manager"])
-      .single();
-
-    if (!roleData) {
-      return new Response(
-        JSON.stringify({ message: "Accès réservé aux administrateurs" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const { user, profile } = authResult.data;
+    const supabase = createServiceClient();
 
     // Validate request body with Zod
     const validation = await validateRequestBody(req, ExtractDataRequestSchema, corsHeaders);
@@ -348,20 +321,6 @@ Deno.serve(async (req) => {
         }
       }
     } else if (type === "dum_records") {
-      // Get user's company
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("user_id", user.id)
-        .single();
-
-      if (!profile?.company_id) {
-        return new Response(
-          JSON.stringify({ message: "Profil utilisateur non trouvé" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
       for (const item of allResults as DUMExtracted[]) {
         const date = normalizeDate(item.dum_date);
         const code10 = normalizeHSCode(item.hs_code);
@@ -418,6 +377,7 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     logger.error("[extract-data] Error:", error);
+    const corsHeaders = getCorsHeaders(req);
     return new Response(
       JSON.stringify({ 
         message: error instanceof Error ? error.message : "Erreur serveur",

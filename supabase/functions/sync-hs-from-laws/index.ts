@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authenticateRequest, createServiceClient } from "../_shared/auth.ts";
+import { getCorsHeaders } from "../_shared/cors.ts";
 import { 
   createBackgroundTask, 
   updateTaskProgress, 
@@ -7,13 +8,6 @@ import {
   failTask 
 } from "../_shared/background-tasks.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_REASONING") || "gpt-4o-mini";
 
@@ -123,8 +117,6 @@ function extractHSUpdatesRegex(lawText: string, lawRef: string): HSUpdate[] {
   const updates: HSUpdate[] = [];
   
   // Pattern pour les modifications de droits
-  // Ex: "Position 8471.30: droit d'importation 10%"
-  // Ex: "Code 0102.29.90.00 : DD = 25%"
   const taxPatterns = [
     /(?:position|code|sous-position)\s*(\d{4}[\.\s]?\d{0,2}[\.\s]?\d{0,2}[\.\s]?\d{0,2})\s*[:\-]?\s*(?:droit|DD|DI|TVA)\s*[=:]?\s*(\d+(?:,\d+)?)\s*%/gi,
     /(\d{4}[\.\s]\d{2}(?:[\.\s]\d{2}){0,2})\s*[:\-\|]\s*(\d+(?:,\d+)?)\s*%/gi,
@@ -296,45 +288,21 @@ async function logSyncHistory(
 // ============================================================================
 
 serve(async (req) => {
+  const corsHeaders = getCorsHeaders(req);
+  
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
   
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  
   try {
-    // Authentification et autorisation
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Authorization required" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Authenticate with custom JWT
+    const authResult = await authenticateRequest(req, { requireRole: ["admin", "manager"] });
+    if (!authResult.success) {
+      return authResult.error;
     }
     
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: "Invalid token" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-    
-    // Vérifier le rôle admin
-    const { data: roleData } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .in("role", ["admin", "manager"]);
-    
-    if (!roleData || roleData.length === 0) {
-      return new Response(
-        JSON.stringify({ error: "Admin role required" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const { user } = authResult.data;
+    const supabase = createServiceClient();
     
     // Parser les options
     const body = await req.json().catch(() => ({}));
@@ -466,6 +434,7 @@ serve(async (req) => {
     
   } catch (e) {
     console.error("[sync-hs] Error:", e);
+    const corsHeaders = getCorsHeaders(req);
     return new Response(
       JSON.stringify({ 
         success: false, 

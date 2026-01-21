@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { DOMParser, Element } from "https://deno.land/x/deno_dom@v0.1.38/deno-dom-wasm.ts";
+import { authenticateRequest, createServiceClient } from "../_shared/auth.ts";
+import { getCorsHeaders } from "../_shared/cors.ts";
 
 // Type alias for deno_dom document
 type HTMLDocument = ReturnType<DOMParser["parseFromString"]>;
@@ -878,41 +879,22 @@ async function scrapeSource(
 // ============================================================================
 
 serve(async (req: Request) => {
+  const corsHeaders = getCorsHeaders(req);
+
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    // Initialize Supabase client
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Verify admin authentication
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return errorResponse("Missing authorization header", 401);
+    // Authenticate using custom JWT (admin required)
+    const authResult = await authenticateRequest(req, { requireRole: ["admin"] });
+    if (!authResult.success) {
+      return authResult.error;
     }
 
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    
-    if (authError || !user) {
-      return errorResponse("Invalid or expired token", 401);
-    }
-
-    // Check if user is admin
-    const { data: userRole, error: roleError } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .eq("role", "admin")
-      .maybeSingle();
-
-    if (roleError || !userRole) {
-      return errorResponse("Admin access required", 403);
-    }
+    // Initialize Supabase client with service role
+    const supabase = createServiceClient();
 
     // Parse request body
     let body: RequestBody = {};

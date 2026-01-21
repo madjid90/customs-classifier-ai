@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface DetectedFile {
   id: string;
@@ -54,6 +54,7 @@ const getFileIcon = (filename: string) => {
 
 export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () => void }) {
   const { toast } = useToast();
+  const { getAuthHeaders } = useAuth();
   const [files, setFiles] = useState<DetectedFile[]>([]);
   const [isProcessingAll, setIsProcessingAll] = useState(false);
 
@@ -62,26 +63,38 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
       // Read file content
       const text = await readFileContent(file);
       
-      const { data: session } = await supabase.auth.getSession();
-      if (!session?.session?.access_token) {
+      const headers = getAuthHeaders();
+      if (!headers.Authorization) {
         throw new Error("Non authentifié");
       }
 
       // Call AI analysis
-      const response = await supabase.functions.invoke("analyze-file", {
-        body: {
-          action: "analyze",
-          content: text.slice(0, 10000), // Send first 10KB for analysis
-          filename: file.name,
-        },
-      });
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-file`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...headers,
+          },
+          body: JSON.stringify({
+            action: "analyze",
+            content: text.slice(0, 10000), // Send first 10KB for analysis
+            filename: file.name,
+          }),
+        }
+      );
 
-      if (response.error) throw response.error;
+      if (!response.ok) {
+        throw new Error(`Erreur ${response.status}`);
+      }
+
+      const data = await response.json();
 
       return {
-        type: response.data.detectedType || "Document",
-        database: response.data.targetDatabase || "kb_chunks",
-        confidence: response.data.confidence || 0.5,
+        type: data.detectedType || "Document",
+        database: data.targetDatabase || "kb_chunks",
+        confidence: data.confidence || 0.5,
       };
     } catch (e) {
       console.error("AI analysis failed:", e);
@@ -209,8 +222,8 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
     );
 
     try {
-      const { data: session } = await supabase.auth.getSession();
-      if (!session?.session?.access_token) throw new Error("Non authentifié");
+      const headers = getAuthHeaders();
+      if (!headers.Authorization) throw new Error("Non authentifié");
 
       // Read file content
       const content = await readFileContent(fileItem.file);
@@ -220,28 +233,42 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
       );
 
       // Process with AI and store
-      const response = await supabase.functions.invoke("analyze-file", {
-        body: {
-          action: "process",
-          content: content,
-          filename: fileItem.file.name,
-        },
-      });
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-file`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...headers,
+          },
+          body: JSON.stringify({
+            action: "process",
+            content: content,
+            filename: fileItem.file.name,
+            targetDatabase: fileItem.targetDatabase,
+          }),
+        }
+      );
 
-      if (response.error) throw new Error(response.error.message);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Erreur ${response.status}`);
+      }
+
+      const data = await response.json();
 
       setFiles((prev) =>
         prev.map((f) => (f.id === fileItem.id ? { 
           ...f, 
           status: "done", 
           progress: 100,
-          recordsCreated: response.data.recordsCreated || 0
+          recordsCreated: data.recordsCreated || 0
         } : f))
       );
 
       toast({
         title: "Fichier traité avec succès",
-        description: `${fileItem.file.name} → ${response.data.recordsCreated || 0} enregistrements créés dans ${DATABASE_LABELS[response.data.targetDatabase] || "la base"}`,
+        description: `${fileItem.file.name} → ${data.recordsCreated || 0} enregistrements créés dans ${DATABASE_LABELS[data.targetDatabase] || "la base"}`,
       });
     } catch (err) {
       setFiles((prev) =>

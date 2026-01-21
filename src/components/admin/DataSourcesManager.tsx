@@ -87,6 +87,8 @@ interface ScrapeConfig {
   link_pattern?: string;
   min_content_length?: number;
   use_firecrawl?: boolean;
+  extract_pdfs?: boolean;
+  pdf_link_pattern?: string;
   api_config?: {
     method?: string;
     headers?: Record<string, string>;
@@ -136,6 +138,8 @@ interface FormData {
   link_pattern: string;
   min_content_length: number;
   use_firecrawl: boolean;
+  extract_pdfs: boolean;
+  pdf_link_pattern: string;
 }
 
 const KB_SOURCE_ICONS: Record<KbSource, string> = {
@@ -199,6 +203,8 @@ const defaultFormData: FormData = {
   link_pattern: "",
   min_content_length: 100,
   use_firecrawl: false,
+  extract_pdfs: true,
+  pdf_link_pattern: "",
 };
 
 export function DataSourcesManager() {
@@ -257,6 +263,8 @@ export function DataSourcesManager() {
         link_pattern: source.scrape_config?.link_pattern || "",
         min_content_length: source.scrape_config?.min_content_length || 100,
         use_firecrawl: source.scrape_config?.use_firecrawl ?? false,
+        extract_pdfs: source.scrape_config?.extract_pdfs ?? true,
+        pdf_link_pattern: source.scrape_config?.pdf_link_pattern || "",
       });
     } else {
       setEditingSource(null);
@@ -303,6 +311,8 @@ export function DataSourcesManager() {
         link_pattern: formData.link_pattern || null,
         min_content_length: formData.min_content_length,
         use_firecrawl: formData.use_firecrawl,
+        extract_pdfs: formData.extract_pdfs,
+        pdf_link_pattern: formData.pdf_link_pattern || null,
       };
 
       const baseUrl = new URL(formData.url).origin;
@@ -793,6 +803,45 @@ export function DataSourcesManager() {
                       onCheckedChange={(checked) => setFormData((f) => ({ ...f, use_firecrawl: checked }))}
                     />
                   </div>
+
+                  {/* PDF Extraction Toggle - Only visible when Firecrawl is enabled */}
+                  {formData.use_firecrawl && (
+                    <>
+                      <div className="flex items-center justify-between rounded-lg border p-4 bg-muted/30">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-blue-500" />
+                            <Label htmlFor="extract_pdfs" className="font-medium">
+                              Extraire les fichiers PDF
+                            </Label>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Découvre et extrait automatiquement le contenu des PDFs liés
+                          </p>
+                        </div>
+                        <Switch
+                          id="extract_pdfs"
+                          checked={formData.extract_pdfs}
+                          onCheckedChange={(checked) => setFormData((f) => ({ ...f, extract_pdfs: checked }))}
+                        />
+                      </div>
+
+                      {formData.extract_pdfs && (
+                        <div className="space-y-2 pl-4 border-l-2 border-blue-200">
+                          <Label htmlFor="pdf_link_pattern">Pattern liens PDF (regex)</Label>
+                          <Input
+                            id="pdf_link_pattern"
+                            value={formData.pdf_link_pattern}
+                            onChange={(e) => setFormData((f) => ({ ...f, pdf_link_pattern: e.target.value }))}
+                            placeholder="Ex: tarif.*\\.pdf (par défaut: \\.pdf$)"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Filtrer les PDFs à extraire (optionnel, tous les PDFs par défaut)
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             </div>

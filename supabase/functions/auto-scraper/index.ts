@@ -216,6 +216,44 @@ class FirecrawlScraper {
     return null;
   }
 
+  private async scrapePageForLinks(url: string, apiKey: string): Promise<{ links: string[], pdfLinks: string[] }> {
+    const links: string[] = [];
+    const pdfLinks: string[] = [];
+    
+    try {
+      const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: url,
+          formats: ["links"],
+          waitFor: 3000, // Wait for JS to load dynamic content
+        }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const pageLinks = data.data?.links || data.links || [];
+        
+        for (const link of pageLinks) {
+          if (this.isPdfUrl(link)) {
+            pdfLinks.push(link);
+          } else if (link.startsWith(this.baseUrl) || link.startsWith("/")) {
+            // Only follow links from same domain
+            links.push(link.startsWith("/") ? `${this.baseUrl}${link}` : link);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`[FirecrawlScraper] Failed to scrape ${url} for links:`, error);
+    }
+    
+    return { links, pdfLinks };
+  }
+
   async scrape(): Promise<{ pages: ScrapedPage[]; errors: Array<{ url: string; error: string }> }> {
     const FIRECRAWL_API_KEY = Deno.env.get("FIRECRAWL_API_KEY");
     if (!FIRECRAWL_API_KEY) {
@@ -232,178 +270,64 @@ class FirecrawlScraper {
     const pages: ScrapedPage[] = [];
     const errors: Array<{ url: string; error: string }> = [];
     const discoveredPdfUrls: Set<string> = new Set();
+    const visitedUrls: Set<string> = new Set();
+    const urlQueue: Array<{ url: string; depth: number }> = [{ url: this.startUrl, depth: 0 }];
 
     console.log(`[FirecrawlScraper] Starting crawl of ${this.startUrl} with Firecrawl`);
     console.log(`[FirecrawlScraper] PDF extraction: ${extractPdfs ? 'enabled' : 'disabled'}`);
+    console.log(`[FirecrawlScraper] Max depth: ${maxDepth}, Max pages: ${maxPages}`);
 
     try {
-      // First, use Map to discover all URLs on the site (including PDFs)
-      console.log(`[FirecrawlScraper] Step 1: Mapping site to discover URLs...`);
+      // Step 1: Deep crawl to discover all navigation links and PDFs
+      console.log(`[FirecrawlScraper] Step 1: Deep crawling to discover all links and PDFs...`);
       
-      const mapResponse = await fetch("https://api.firecrawl.dev/v1/map", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          url: this.startUrl,
-          limit: maxPages * 2, // Get more URLs to find PDFs
-          includeSubdomains: true, // Include subdomains for document servers
-        }),
-      });
-
-      if (mapResponse.ok) {
-        const mapData = await mapResponse.json();
-        const allLinks = mapData.links || mapData.data?.links || [];
+      while (urlQueue.length > 0 && visitedUrls.size < maxPages * 2) {
+        const { url, depth } = urlQueue.shift()!;
         
-        console.log(`[FirecrawlScraper] Found ${allLinks.length} URLs on site`);
-
-        // Filter PDF URLs
-        if (extractPdfs) {
-          for (const link of allLinks) {
-            if (this.isPdfUrl(link)) {
-              discoveredPdfUrls.add(link);
-              console.log(`[FirecrawlScraper] Found PDF link: ${link}`);
-            }
-          }
-          console.log(`[FirecrawlScraper] Found ${discoveredPdfUrls.size} PDF files`);
-        }
-      } else {
-        const errorText = await mapResponse.text();
-        console.warn(`[FirecrawlScraper] Map request failed: ${errorText}`);
-      }
-      
-      // Step 1b: Also try scraping the main page to find links (Firecrawl Map might miss dynamic links)
-      console.log(`[FirecrawlScraper] Step 1b: Scraping main page for links...`);
-      try {
-        const scrapeForLinks = await fetch("https://api.firecrawl.dev/v1/scrape", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            url: this.startUrl,
-            formats: ["links"],
-            waitFor: 3000, // Wait for JS to load
-          }),
-        });
+        // Skip if already visited or exceeds max depth
+        if (visitedUrls.has(url) || depth > maxDepth) continue;
+        visitedUrls.add(url);
         
-        if (scrapeForLinks.ok) {
-          const linkData = await scrapeForLinks.json();
-          const pageLinks = linkData.data?.links || linkData.links || [];
-          console.log(`[FirecrawlScraper] Found ${pageLinks.length} links from page scrape`);
-          
-          if (extractPdfs) {
-            for (const link of pageLinks) {
-              if (this.isPdfUrl(link)) {
-                discoveredPdfUrls.add(link);
-                console.log(`[FirecrawlScraper] Found PDF link from scrape: ${link}`);
-              }
-            }
-            console.log(`[FirecrawlScraper] Total PDF files after scrape: ${discoveredPdfUrls.size}`);
+        console.log(`[FirecrawlScraper] Crawling page ${visitedUrls.size}: ${url} (depth: ${depth})`);
+        
+        // Scrape page for links
+        const { links, pdfLinks } = await this.scrapePageForLinks(url, FIRECRAWL_API_KEY);
+        
+        // Add discovered PDFs
+        for (const pdfLink of pdfLinks) {
+          if (!discoveredPdfUrls.has(pdfLink)) {
+            discoveredPdfUrls.add(pdfLink);
+            console.log(`[FirecrawlScraper] Found PDF: ${pdfLink}`);
           }
         }
-      } catch (scrapeError) {
-        console.warn(`[FirecrawlScraper] Link scrape failed:`, scrapeError);
-      }
-
-      // Step 2: Crawl HTML pages
-      console.log(`[FirecrawlScraper] Step 2: Crawling HTML pages...`);
-      
-      const crawlResponse = await fetch("https://api.firecrawl.dev/v1/crawl", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          url: this.startUrl,
-          limit: maxPages,
-          maxDepth: maxDepth,
-          scrapeOptions: {
-            formats: ["markdown", "links"],
-            onlyMainContent: true,
-          },
-          includePaths: this.config.link_pattern ? [this.config.link_pattern] : undefined,
-          excludePaths: extractPdfs ? undefined : ["*.pdf"], // Exclude PDFs from crawl if not extracting
-        }),
-      });
-
-      if (!crawlResponse.ok) {
-        const errorData = await crawlResponse.json().catch(() => ({}));
-        throw new Error(errorData.error || `Firecrawl API error: ${crawlResponse.status}`);
-      }
-
-      const crawlData = await crawlResponse.json();
-      
-      // Poll for crawl completion
-      if (crawlData.id) {
-        console.log(`[FirecrawlScraper] Crawl job started: ${crawlData.id}`);
         
-        const maxWait = 5 * 60 * 1000;
-        const pollInterval = 5000;
-        const startTime = Date.now();
-        
-        while (Date.now() - startTime < maxWait) {
-          await new Promise(resolve => setTimeout(resolve, pollInterval));
-          
-          const statusResponse = await fetch(`https://api.firecrawl.dev/v1/crawl/${crawlData.id}`, {
-            headers: {
-              "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
-            },
-          });
-          
-          if (!statusResponse.ok) {
-            throw new Error(`Failed to check crawl status: ${statusResponse.status}`);
-          }
-          
-          const statusData = await statusResponse.json();
-          console.log(`[FirecrawlScraper] Crawl status: ${statusData.status}, completed: ${statusData.completed}/${statusData.total}`);
-          
-          if (statusData.status === "completed" || statusData.status === "failed") {
-            if (statusData.data && Array.isArray(statusData.data)) {
-              for (const page of statusData.data) {
-                const pageUrl = page.metadata?.sourceURL || page.url || this.startUrl;
-                
-                // Collect PDF links from page content
-                if (extractPdfs && page.links) {
-                  for (const link of page.links) {
-                    if (this.isPdfUrl(link)) {
-                      discoveredPdfUrls.add(link);
-                    }
-                  }
-                }
-                
-                // Skip PDF pages in HTML crawl (we'll handle them separately)
-                if (this.isPdfUrl(pageUrl)) continue;
-                
-                pages.push({
-                  url: pageUrl,
-                  title: page.metadata?.title || page.title || "",
-                  content: page.markdown || page.content || "",
-                  ref: this.extractRefFromUrl(pageUrl),
-                  links: page.links || [],
-                  scraped_at: new Date().toISOString(),
-                  metadata: page.metadata,
-                });
-              }
+        // Add new navigation links to queue
+        for (const link of links) {
+          if (!visitedUrls.has(link) && !urlQueue.some(q => q.url === link)) {
+            // Filter out PDF links and external links
+            if (!this.isPdfUrl(link)) {
+              urlQueue.push({ url: link, depth: depth + 1 });
             }
-            
-            if (statusData.status === "failed") {
-              errors.push({ url: this.startUrl, error: statusData.error || "Crawl failed" });
-            }
-            break;
           }
         }
+        
+        // Small delay to be respectful
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Stop if we've found enough PDFs
+        if (discoveredPdfUrls.size >= maxPages) {
+          console.log(`[FirecrawlScraper] Reached max PDF limit (${maxPages}), stopping discovery`);
+          break;
+        }
       }
+      
+      console.log(`[FirecrawlScraper] Discovery complete: visited ${visitedUrls.size} pages, found ${discoveredPdfUrls.size} PDFs`);
 
-      // Step 3: Scrape discovered PDFs
+      // Step 2: Extract PDFs (this is the main content for this type of site)
       if (extractPdfs && discoveredPdfUrls.size > 0) {
-        console.log(`[FirecrawlScraper] Step 3: Extracting ${discoveredPdfUrls.size} PDF files...`);
+        console.log(`[FirecrawlScraper] Step 2: Extracting ${discoveredPdfUrls.size} PDF files...`);
         
-        const pdfUrls = Array.from(discoveredPdfUrls).slice(0, maxPages); // Limit PDFs
+        const pdfUrls = Array.from(discoveredPdfUrls).slice(0, maxPages);
         let pdfCount = 0;
         
         for (const pdfUrl of pdfUrls) {

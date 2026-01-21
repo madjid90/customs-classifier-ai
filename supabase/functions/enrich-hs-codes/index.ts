@@ -1,7 +1,7 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders } from "../_shared/cors.ts";
+import { getCorsHeaders } from "../_shared/cors.ts";
+import { authenticateRequest, createServiceClient } from "../_shared/auth.ts";
 import { 
   createBackgroundTask, 
   updateTaskProgress, 
@@ -122,46 +122,23 @@ Réponds UNIQUEMENT en JSON valide, sans markdown :
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = getCorsHeaders(req);
+  
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Vérifier auth
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Non authentifié" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Authenticate with custom JWT - require admin role
+    const authResult = await authenticateRequest(req, { requireRole: ["admin"] });
+    if (!authResult.success) {
+      return authResult.error;
     }
-
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: "Token invalide" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const { user } = authResult.data;
 
-    // Vérifier rôle admin
-    const { data: hasAdmin } = await supabase.rpc("has_role", { 
-      _user_id: user.id, 
-      _role: "admin" 
-    });
-
-    if (!hasAdmin) {
-      return new Response(
-        JSON.stringify({ error: "Accès réservé aux administrateurs" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    // Initialize Supabase client with service role
+    const supabase = createServiceClient();
 
     // Vérifier clé OpenAI
     const openaiKey = Deno.env.get("OPENAI_API_KEY");
@@ -188,7 +165,7 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({
           error: "Validation error",
-          details: validation.error.issues.map(i => ({
+          details: validation.error.issues.map((i: { path: (string | number)[]; message: string }) => ({
             field: i.path.join("."),
             message: i.message,
           })),

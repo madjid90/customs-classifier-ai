@@ -95,3 +95,6 @@ verify_jwt = false
 
 [functions.analyze-file]
 verify_jwt = false
+
+[functions.auto-scraper]
+verify_jwt = false

@@ -125,19 +125,31 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
     return { type: "Document", database: "kb_chunks", confidence: 0.5 };
   };
 
-  const readFileContent = (file: File): Promise<string> => {
+  const readFileContent = async (file: File): Promise<string> => {
+    // For text-based files, read directly
+    if (file.type.includes("text") || 
+        file.name.endsWith(".csv") || 
+        file.name.endsWith(".json") ||
+        file.name.endsWith(".txt") ||
+        file.name.endsWith(".xml")) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target?.result as string || "");
+        reader.onerror = () => reject(new Error("Erreur de lecture"));
+        reader.readAsText(file);
+      });
+    }
+    
+    // For PDFs and other binary files, convert to base64 for server-side processing
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target?.result as string || "");
+      reader.onload = (e) => {
+        const base64 = e.target?.result as string;
+        // Send as base64 with marker so server knows to process it
+        resolve(`[BASE64_FILE:${file.type}]${base64.split(',')[1] || base64}`);
+      };
       reader.onerror = () => reject(new Error("Erreur de lecture"));
-      
-      // For binary files, try to read as text anyway
-      if (file.type.includes("image") || file.type.includes("application/pdf")) {
-        // For PDF/images, we'll rely on filename analysis mainly
-        resolve(`[Fichier binaire: ${file.name}]`);
-      } else {
-        reader.readAsText(file);
-      }
+      reader.readAsDataURL(file);
     });
   };
 

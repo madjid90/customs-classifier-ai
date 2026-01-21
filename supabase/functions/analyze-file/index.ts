@@ -10,8 +10,9 @@ const DATABASE_TARGETS = {
       /tarif|nomenclature|harmonis[ée]|sh\s*\d|code.*douane/i,
       /position.*tarifaire|chapitre.*\d{2}/i,
       /\d{4}\.\d{2}\.\d{2}/,  // Format HS code
+      /produits?\s+contr[ôo]l[ée]s|origine|certificat/i, // Controlled products
     ],
-    contentIndicators: ["code", "libellé", "position", "sous-position", "droits", "taxes"],
+    contentIndicators: ["code", "libellé", "position", "sous-position", "droits", "taxes", "origine", "contrôlé"],
   },
   kb_chunks_omd: {
     name: "Notes explicatives OMD",
@@ -65,6 +66,76 @@ interface FileAnalysis {
   extractedData?: any;
   summary: string;
   contentPreview: string;
+}
+
+// Extract text from base64 PDF using Lovable AI vision
+async function extractTextFromPDF(base64Content: string, filename: string): Promise<string> {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  
+  if (!LOVABLE_API_KEY) {
+    console.log("[analyze-file] No LOVABLE_API_KEY, cannot process PDF");
+    return `[PDF non traité: ${filename}]`;
+  }
+
+  try {
+    console.log(`[analyze-file] Extracting text from PDF: ${filename}`);
+    
+    // Use Gemini vision model to extract text from PDF
+    const response = await fetch("https://api.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Extrait et transcris TOUT le texte de ce document PDF. 
+                
+IMPORTANT:
+- Extrait le texte tel quel, sans résumer ni reformuler
+- Préserve la structure (tableaux, listes, colonnes)
+- Si c'est une liste de codes HS ou de produits, extrait chaque ligne avec son code et son libellé
+- Format de sortie: texte brut, un élément par ligne
+- Si tu vois des codes numériques (comme 0101.21.00), garde-les exactement
+
+Commence directement l'extraction sans introduction.`
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:application/pdf;base64,${base64Content}`
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 16000,
+        temperature: 0.1,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("[analyze-file] Lovable API error:", response.status, errorText);
+      throw new Error(`Lovable API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const extractedText = data.choices?.[0]?.message?.content || "";
+    
+    console.log(`[analyze-file] Extracted ${extractedText.length} chars from PDF`);
+    
+    return extractedText;
+  } catch (e) {
+    console.error("[analyze-file] PDF extraction error:", e);
+    return `[Erreur extraction PDF: ${filename}]`;
+  }
 }
 
 async function analyzeWithAI(content: string, filename: string): Promise<FileAnalysis> {
@@ -365,11 +436,32 @@ serve(async (req) => {
     const supabase = createServiceClient();
 
     const body = await req.json();
-    const { action, content, filename } = body;
+    let { action, content, filename, targetDatabase } = body;
+
+    // Check if content is base64-encoded PDF
+    let processedContent = content || "";
+    if (processedContent.startsWith("[BASE64_FILE:")) {
+      const typeMatch = processedContent.match(/\[BASE64_FILE:([^\]]+)\]/);
+      const fileType = typeMatch?.[1] || "";
+      const base64Data = processedContent.replace(/\[BASE64_FILE:[^\]]+\]/, "");
+      
+      if (fileType.includes("pdf") || filename?.toLowerCase().endsWith(".pdf")) {
+        console.log(`[analyze-file] Processing PDF: ${filename}`);
+        processedContent = await extractTextFromPDF(base64Data, filename || "document.pdf");
+        console.log(`[analyze-file] PDF extracted, got ${processedContent.length} chars`);
+      } else {
+        // For other binary files, try to decode base64 as text
+        try {
+          processedContent = atob(base64Data);
+        } catch {
+          processedContent = `[Fichier binaire: ${filename}]`;
+        }
+      }
+    }
 
     // Action: analyze - just detect type
     if (action === "analyze") {
-      const analysis = await analyzeWithAI(content || "", filename || "document");
+      const analysis = await analyzeWithAI(processedContent, filename || "document");
       
       return new Response(JSON.stringify(analysis), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -378,8 +470,14 @@ serve(async (req) => {
 
     // Action: process - analyze and store
     if (action === "process") {
-      const analysis = await analyzeWithAI(content || "", filename || "document");
-      const result = await processAndStore(supabase, analysis, content || "", filename || "document", user.id);
+      // Allow overriding detected database
+      let analysis = await analyzeWithAI(processedContent, filename || "document");
+      if (targetDatabase && targetDatabase !== analysis.targetDatabase) {
+        analysis.targetDatabase = targetDatabase;
+        analysis.confidence = 1;
+      }
+      
+      const result = await processAndStore(supabase, analysis, processedContent, filename || "document", user.id);
       
       return new Response(JSON.stringify({
         ...analysis,

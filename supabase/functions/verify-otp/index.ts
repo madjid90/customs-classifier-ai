@@ -1,7 +1,7 @@
 import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { SignJWT } from "https://deno.land/x/jose@v4.14.4/index.ts";
 import { logger } from "../_shared/logger.ts";
-import { corsHeaders } from "../_shared/cors.ts";
+import { getCorsHeaders } from "../_shared/cors.ts";
 import { createServiceClient, getUserRole } from "../_shared/auth.ts";
 import { 
   PhoneSchema, 
@@ -20,13 +20,16 @@ const VerifyOtpSchema = z.object({
 });
 
 Deno.serve(async (req) => {
+  // Get dynamic CORS headers based on request origin
+  const corsHeaders = getCorsHeaders(req);
+
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
     // Validate request body using centralized validation
-    const validation = await validateRequestBody(req, VerifyOtpSchema);
+    const validation = await validateRequestBody(req, VerifyOtpSchema, corsHeaders);
     if (!validation.success) {
       return validation.error;
     }

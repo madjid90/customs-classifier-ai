@@ -138,6 +138,129 @@ Commence directement l'extraction sans introduction.`
   }
 }
 
+// Extract HS codes using AI with tool calling for structured output
+async function extractHSCodesWithAI(content: string, filename: string): Promise<Array<{code_10: string; label_fr: string}>> {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  
+  if (!LOVABLE_API_KEY) {
+    console.log("[analyze-file] No LOVABLE_API_KEY, cannot extract HS codes with AI");
+    return [];
+  }
+
+  try {
+    console.log(`[analyze-file] Extracting HS codes from document: ${filename}`);
+    
+    // Split content into chunks if too large
+    const MAX_CONTENT = 30000;
+    const contentToProcess = content.length > MAX_CONTENT ? content.slice(0, MAX_CONTENT) : content;
+    
+    const response = await fetch("https://api.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `Tu es un expert en nomenclature douanière. Extrait TOUS les codes HS (Système Harmonisé) de ce document.
+
+RÈGLES IMPORTANTES:
+- Les codes HS ont entre 6 et 10 chiffres
+- Normalise tous les codes à 10 chiffres en ajoutant des 0 à la fin si nécessaire
+- Pour chaque code, associe le libellé ou la désignation du produit
+- Si plusieurs codes sont associés à un même produit, crée une entrée pour chaque code
+- Ignore les codes qui ne sont clairement pas des codes HS (numéros de téléphone, dates, etc.)
+- Si un code commence par "EX", c'est quand même un code HS valide`
+          },
+          {
+            role: "user",
+            content: `Extrait tous les codes HS de ce document:\n\n${contentToProcess}`
+          }
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "extract_hs_codes",
+              description: "Extrait les codes HS et leurs libellés du document",
+              parameters: {
+                type: "object",
+                properties: {
+                  codes: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        code_10: { 
+                          type: "string", 
+                          description: "Code HS normalisé à 10 chiffres" 
+                        },
+                        label_fr: { 
+                          type: "string", 
+                          description: "Désignation ou libellé du produit en français" 
+                        }
+                      },
+                      required: ["code_10", "label_fr"]
+                    }
+                  }
+                },
+                required: ["codes"]
+              }
+            }
+          }
+        ],
+        tool_choice: { type: "function", function: { name: "extract_hs_codes" } },
+        max_tokens: 16000,
+        temperature: 0.1,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("[analyze-file] Lovable API error for HS extraction:", response.status, errorText);
+      return [];
+    }
+
+    const data = await response.json();
+    
+    // Extract from tool call
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (toolCall?.function?.arguments) {
+      try {
+        const parsed = JSON.parse(toolCall.function.arguments);
+        const codes = parsed.codes || [];
+        
+        // Validate and normalize codes
+        const validCodes = codes
+          .filter((c: any) => c.code_10 && c.label_fr)
+          .map((c: any) => ({
+            code_10: c.code_10.replace(/\D/g, '').padEnd(10, '0').slice(0, 10),
+            label_fr: c.label_fr.trim()
+          }))
+          .filter((c: any) => {
+            // Validate: should be 10 digits and chapter should be 01-99
+            const chapter = parseInt(c.code_10.slice(0, 2), 10);
+            return c.code_10.length === 10 && chapter >= 1 && chapter <= 99;
+          });
+        
+        console.log(`[analyze-file] AI extracted ${validCodes.length} valid HS codes`);
+        return validCodes;
+      } catch (e) {
+        console.error("[analyze-file] Error parsing HS codes response:", e);
+        return [];
+      }
+    }
+    
+    return [];
+  } catch (e) {
+    console.error("[analyze-file] HS extraction error:", e);
+    return [];
+  }
+}
+
 async function analyzeWithAI(content: string, filename: string): Promise<FileAnalysis> {
   // First do pattern-based detection
   let bestMatch = { type: "unknown", database: "kb_chunks", confidence: 0, source: undefined as string | undefined };
@@ -272,46 +395,79 @@ async function processAndStore(
     }
     // For HS codes (requires specific format)
     else if (analysis.targetDatabase === "hs_codes") {
-      // Try to extract HS codes from content
-      const hsCodePattern = /(\d{4}[\.\s]?\d{2}[\.\s]?\d{2}[\.\s]?\d{2})\s*[-–:]\s*(.+?)(?=\n\d{4}|$)/gs;
-      let match;
-      const records = [];
+      // Use AI to extract HS codes from the document
+      const extractedCodes = await extractHSCodesWithAI(content, filename);
       
-      while ((match = hsCodePattern.exec(content)) !== null) {
-        const code10 = match[1].replace(/[\.\s]/g, '').padEnd(10, '0');
-        const label = match[2].trim();
+      if (extractedCodes.length > 0) {
+        // Deduplicate by code_10
+        const uniqueCodes = new Map<string, typeof extractedCodes[0]>();
+        for (const code of extractedCodes) {
+          if (!uniqueCodes.has(code.code_10)) {
+            uniqueCodes.set(code.code_10, code);
+          }
+        }
         
-        records.push({
-          code_10: code10,
-          code_6: code10.slice(0, 6),
-          code_4: code10.slice(0, 4),
-          chapter_2: code10.slice(0, 2),
-          label_fr: label.slice(0, 500),
+        const records = Array.from(uniqueCodes.values()).map(code => ({
+          code_10: code.code_10,
+          code_6: code.code_10.slice(0, 6),
+          code_4: code.code_10.slice(0, 4),
+          chapter_2: code.code_10.slice(0, 2),
+          label_fr: code.label_fr.slice(0, 500),
           active: true,
           active_version_label: versionLabel,
-        });
-      }
+        }));
 
-      if (records.length > 0) {
         const { error } = await supabase
           .from("hs_codes")
           .upsert(records, { onConflict: "code_10" });
         if (error) throw error;
         recordsCreated = records.length;
+        console.log(`[analyze-file] Extracted and stored ${recordsCreated} HS codes`);
       } else {
-        // If no structured data, store as kb_chunk
-        const chunks = chunkText(content, filename, 1000, 200);
-        const kbRecords = chunks.map((chunk, idx) => ({
-          source: "maroc",
-          doc_id: filename,
-          ref: `${filename} [${idx + 1}]`,
-          text: chunk,
-          version_label: versionLabel,
-        }));
+        // Fallback: try regex patterns for HS codes
+        const hsCodePattern = /\b(\d{6,10})\b/g;
+        const foundCodes = new Set<string>();
+        let match;
         
-        const { error } = await supabase.from("kb_chunks").insert(kbRecords);
-        if (error) throw error;
-        recordsCreated = chunks.length;
+        while ((match = hsCodePattern.exec(content)) !== null) {
+          const code = match[1].padEnd(10, '0');
+          if (code.length === 10 && !code.startsWith('0000')) {
+            foundCodes.add(code);
+          }
+        }
+        
+        if (foundCodes.size > 0) {
+          const records = Array.from(foundCodes).map(code => ({
+            code_10: code,
+            code_6: code.slice(0, 6),
+            code_4: code.slice(0, 4),
+            chapter_2: code.slice(0, 2),
+            label_fr: `Code HS extrait de: ${filename}`,
+            active: true,
+            active_version_label: versionLabel,
+          }));
+
+          const { error } = await supabase
+            .from("hs_codes")
+            .upsert(records, { onConflict: "code_10" });
+          if (error) throw error;
+          recordsCreated = records.length;
+          console.log(`[analyze-file] Extracted ${recordsCreated} HS codes via regex`);
+        } else {
+          // If no structured data, store as kb_chunk
+          const chunks = chunkText(content, filename, 1000, 200);
+          const kbRecords = chunks.map((chunk, idx) => ({
+            source: "maroc",
+            doc_id: filename,
+            ref: `${filename} [${idx + 1}]`,
+            text: chunk,
+            version_label: versionLabel,
+          }));
+          
+          const { error } = await supabase.from("kb_chunks").insert(kbRecords);
+          if (error) throw error;
+          recordsCreated = chunks.length;
+        }
       }
     }
     // For finance law articles

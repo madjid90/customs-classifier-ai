@@ -219,7 +219,7 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
     );
   };
 
-  const processFile = async (fileItem: DetectedFile) => {
+  const processFile = async (fileItem: DetectedFile, skipCallback = false) => {
     if (!fileItem.targetDatabase) {
       toast({
         title: "Base cible non définie",
@@ -282,6 +282,11 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
         title: "Fichier traité avec succès",
         description: `${fileItem.file.name} → ${data.recordsCreated || 0} enregistrements créés dans ${DATABASE_LABELS[data.targetDatabase] || "la base"}`,
       });
+
+      // Refresh stats after each successful file
+      if (!skipCallback) {
+        onUploadComplete?.();
+      }
     } catch (err) {
       setFiles((prev) =>
         prev.map((f) =>
@@ -304,9 +309,10 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
 
     setIsProcessingAll(true);
     for (const file of readyFiles) {
-      await processFile(file);
+      await processFile(file, true); // Skip individual callbacks during batch
     }
     setIsProcessingAll(false);
+    // Refresh stats once after all files are done
     onUploadComplete?.();
   };
 

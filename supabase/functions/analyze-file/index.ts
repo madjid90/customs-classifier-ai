@@ -422,7 +422,7 @@ async function processAndStore(
         const records = Array.from(uniqueCodes.values()).map(code => ({
           code_10: code.code_10,
           code_6: code.code_10.slice(0, 6),
-          code_4: code.code_10.slice(0, 4),
+          // code_4 is a generated column, do not include it
           chapter_2: code.code_10.slice(0, 2),
           label_fr: code.label_fr.slice(0, 500),
           active: true,
@@ -452,7 +452,7 @@ async function processAndStore(
           const records = Array.from(foundCodes).map(code => ({
             code_10: code,
             code_6: code.slice(0, 6),
-            code_4: code.slice(0, 4),
+            // code_4 is a generated column, do not include it
             chapter_2: code.slice(0, 2),
             label_fr: `Code HS extrait de: ${filename}`,
             active: true,

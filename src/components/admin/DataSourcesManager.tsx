@@ -55,8 +55,15 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
-import { format, formatDistanceToNow } from "date-fns";
+import { 
+  getDataSources, 
+  createDataSource, 
+  updateDataSource, 
+  patchDataSource, 
+  deleteDataSource,
+  triggerScrape 
+} from "@/lib/api-client";
+import { formatDistanceToNow } from "date-fns";
 import { fr } from "date-fns/locale";
 
 // Types
@@ -209,13 +216,8 @@ export function DataSourcesManager() {
   const fetchSources = async () => {
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("data_sources")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      setSources((data || []) as DataSource[]);
+      const response = await getDataSources();
+      setSources((response.data || []) as DataSource[]);
     } catch (err) {
       console.error("Failed to fetch sources:", err);
       toast({
@@ -299,39 +301,31 @@ export function DataSourcesManager() {
       const baseUrl = new URL(formData.url).origin;
 
       if (editingSource) {
-        const { error } = await supabase
-          .from("data_sources")
-          .update({
-            name: formData.name.trim(),
-            url: formData.url.trim(),
-            base_url: baseUrl,
-            description: formData.description.trim() || null,
-            source_type: formData.source_type,
-            kb_source: formData.kb_source,
-            schedule_cron: formData.schedule_cron.trim() || null,
-            version_label: formData.version_label.trim() || "auto",
-            scrape_config: scrapeConfig,
-          })
-          .eq("id", editingSource.id);
-        if (error) throw error;
+        await updateDataSource(editingSource.id, {
+          name: formData.name.trim(),
+          url: formData.url.trim(),
+          base_url: baseUrl,
+          description: formData.description.trim() || undefined,
+          source_type: formData.source_type,
+          kb_source: formData.kb_source,
+          schedule_cron: formData.schedule_cron.trim() || undefined,
+          version_label: formData.version_label.trim() || "auto",
+          scrape_config: scrapeConfig,
+        });
         toast({ title: "Source mise à jour" });
       } else {
-        const { error } = await supabase.from("data_sources").insert([
-          {
-            name: formData.name.trim(),
-            url: formData.url.trim(),
-            base_url: baseUrl,
-            description: formData.description.trim() || null,
-            source_type: formData.source_type,
-            kb_source: formData.kb_source,
-            schedule_cron: formData.schedule_cron.trim() || null,
-            version_label: formData.version_label.trim() || "auto",
-            scrape_config: scrapeConfig,
-            created_by: user.id,
-            status: "active",
-          },
-        ]);
-        if (error) throw error;
+        await createDataSource({
+          name: formData.name.trim(),
+          url: formData.url.trim(),
+          base_url: baseUrl,
+          description: formData.description.trim() || undefined,
+          source_type: formData.source_type,
+          kb_source: formData.kb_source,
+          schedule_cron: formData.schedule_cron.trim() || undefined,
+          version_label: formData.version_label.trim() || "auto",
+          scrape_config: scrapeConfig,
+          status: "active",
+        });
         toast({ title: "Source créée" });
       }
 
@@ -352,11 +346,7 @@ export function DataSourcesManager() {
   const handleToggleStatus = async (source: DataSource) => {
     const newStatus: DataSourceStatus = source.status === "active" ? "paused" : "active";
     try {
-      const { error } = await supabase
-        .from("data_sources")
-        .update({ status: newStatus, error_message: null, error_count: 0 })
-        .eq("id", source.id);
-      if (error) throw error;
+      await patchDataSource(source.id, { status: newStatus, error_message: null, error_count: 0 });
       toast({
         title: newStatus === "active" ? "Source activée" : "Source mise en pause",
       });
@@ -374,12 +364,7 @@ export function DataSourcesManager() {
   const handleManualScrape = async (source: DataSource) => {
     setScrapingSourceId(source.id);
     try {
-      const response = await supabase.functions.invoke("auto-scraper", {
-        body: { source_id: source.id },
-      });
-
-      if (response.error) throw response.error;
-
+      const response = await triggerScrape(source.id);
       const result = response.data;
       toast({
         title: "Scraping terminé",
@@ -402,11 +387,7 @@ export function DataSourcesManager() {
   const handleDelete = async () => {
     if (!sourceToDelete) return;
     try {
-      const { error } = await supabase
-        .from("data_sources")
-        .delete()
-        .eq("id", sourceToDelete.id);
-      if (error) throw error;
+      await deleteDataSource(sourceToDelete.id);
       toast({ title: "Source supprimée" });
       setDeleteDialogOpen(false);
       setSourceToDelete(null);

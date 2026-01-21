@@ -302,3 +302,59 @@ export async function searchKB(q: string, params?: { limit?: number; source?: st
   const headers = getAuthHeaders();
   return axios.get(`${FUNCTIONS_URL}/admin/kb/search`, { params: { q, ...params }, headers });
 }
+
+// ============================================================================
+// DATA SOURCES ENDPOINTS
+// ============================================================================
+
+export async function getDataSources() {
+  const headers = getAuthHeaders();
+  return axios.get(`${FUNCTIONS_URL}/admin-data-sources`, { headers });
+}
+
+export async function createDataSource(data: {
+  name: string;
+  url: string;
+  base_url?: string;
+  description?: string;
+  source_type: string;
+  kb_source: string;
+  schedule_cron?: string;
+  version_label: string;
+  scrape_config: Record<string, unknown>;
+  status?: string;
+}) {
+  const headers = getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/admin-data-sources`, data, { headers });
+}
+
+export async function updateDataSource(sourceId: string, data: {
+  name?: string;
+  url?: string;
+  base_url?: string;
+  description?: string;
+  source_type?: string;
+  kb_source?: string;
+  schedule_cron?: string;
+  version_label?: string;
+  scrape_config?: Record<string, unknown>;
+  status?: string;
+}) {
+  const headers = getAuthHeaders();
+  return axios.put(`${FUNCTIONS_URL}/admin-data-sources/${sourceId}`, data, { headers });
+}
+
+export async function patchDataSource(sourceId: string, data: Record<string, unknown>) {
+  const headers = getAuthHeaders();
+  return axios.patch(`${FUNCTIONS_URL}/admin-data-sources/${sourceId}`, data, { headers });
+}
+
+export async function deleteDataSource(sourceId: string) {
+  const headers = getAuthHeaders();
+  return axios.delete(`${FUNCTIONS_URL}/admin-data-sources/${sourceId}`, { headers });
+}
+
+export async function triggerScrape(sourceId: string) {
+  const headers = getAuthHeaders();
+  return axios.post(`${FUNCTIONS_URL}/auto-scraper`, { source_id: sourceId }, { headers });
+}

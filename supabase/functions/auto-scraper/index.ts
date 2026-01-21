@@ -74,6 +74,9 @@ interface ScrapeConfig {
   };
   // Firecrawl for JavaScript-heavy sites
   use_firecrawl?: boolean;
+  // PDF handling
+  extract_pdfs?: boolean;
+  pdf_link_pattern?: string; // regex pattern for PDF links (default: \.pdf$)
 }
 
 interface ScrapedPage {
@@ -128,12 +131,76 @@ class FirecrawlScraper {
       const path = urlObj.pathname;
       let ref = path
         .replace(/^\/|\/$/g, "")
-        .replace(/\.(html?|php|aspx?|jsf?)$/i, "")
+        .replace(/\.(html?|php|aspx?|jsf?|pdf)$/i, "")
         .replace(/\//g, "_");
       return ref || "index";
     } catch {
       return "unknown";
     }
+  }
+
+  private isPdfUrl(url: string): boolean {
+    const pdfPattern = this.config.pdf_link_pattern || "\\.pdf($|\\?)";
+    try {
+      return new RegExp(pdfPattern, "i").test(url);
+    } catch {
+      return url.toLowerCase().includes(".pdf");
+    }
+  }
+
+  private async scrapePdf(pdfUrl: string): Promise<ScrapedPage | null> {
+    const FIRECRAWL_API_KEY = Deno.env.get("FIRECRAWL_API_KEY");
+    if (!FIRECRAWL_API_KEY) return null;
+
+    console.log(`[FirecrawlScraper] Scraping PDF: ${pdfUrl}`);
+
+    try {
+      const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: pdfUrl,
+          formats: ["markdown"],
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[FirecrawlScraper] PDF scrape failed for ${pdfUrl}: ${errorText}`);
+        return null;
+      }
+
+      const data = await response.json();
+      const content = data.data?.markdown || data.markdown || "";
+
+      if (content && content.length > 50) {
+        // Extract filename from URL for title
+        const urlObj = new URL(pdfUrl);
+        const filename = urlObj.pathname.split("/").pop() || "document.pdf";
+        const title = data.data?.metadata?.title || filename.replace(".pdf", "");
+
+        return {
+          url: pdfUrl,
+          title: title,
+          content: content,
+          ref: this.extractRefFromUrl(pdfUrl),
+          links: [],
+          scraped_at: new Date().toISOString(),
+          metadata: {
+            ...data.data?.metadata,
+            type: "pdf",
+            filename: filename,
+          },
+        };
+      }
+    } catch (error) {
+      console.error(`[FirecrawlScraper] Error scraping PDF ${pdfUrl}:`, error);
+    }
+
+    return null;
   }
 
   async scrape(): Promise<{ pages: ScrapedPage[]; errors: Array<{ url: string; error: string }> }> {
@@ -148,13 +215,53 @@ class FirecrawlScraper {
 
     const maxPages = this.config.max_pages || 50;
     const maxDepth = this.config.max_depth || 3;
+    const extractPdfs = this.config.extract_pdfs !== false; // Default to true
     const pages: ScrapedPage[] = [];
     const errors: Array<{ url: string; error: string }> = [];
+    const discoveredPdfUrls: Set<string> = new Set();
 
     console.log(`[FirecrawlScraper] Starting crawl of ${this.startUrl} with Firecrawl`);
+    console.log(`[FirecrawlScraper] PDF extraction: ${extractPdfs ? 'enabled' : 'disabled'}`);
 
     try {
-      // Use Firecrawl crawl endpoint for multi-page crawling
+      // First, use Map to discover all URLs on the site (including PDFs)
+      console.log(`[FirecrawlScraper] Step 1: Mapping site to discover URLs...`);
+      
+      const mapResponse = await fetch("https://api.firecrawl.dev/v1/map", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: this.startUrl,
+          limit: maxPages * 2, // Get more URLs to find PDFs
+          includeSubdomains: false,
+        }),
+      });
+
+      if (mapResponse.ok) {
+        const mapData = await mapResponse.json();
+        const allLinks = mapData.links || mapData.data?.links || [];
+        
+        console.log(`[FirecrawlScraper] Found ${allLinks.length} URLs on site`);
+
+        // Filter PDF URLs
+        if (extractPdfs) {
+          for (const link of allLinks) {
+            if (this.isPdfUrl(link)) {
+              discoveredPdfUrls.add(link);
+            }
+          }
+          console.log(`[FirecrawlScraper] Found ${discoveredPdfUrls.size} PDF files`);
+        }
+      } else {
+        console.warn(`[FirecrawlScraper] Map request failed, continuing with crawl only`);
+      }
+
+      // Step 2: Crawl HTML pages
+      console.log(`[FirecrawlScraper] Step 2: Crawling HTML pages...`);
+      
       const crawlResponse = await fetch("https://api.firecrawl.dev/v1/crawl", {
         method: "POST",
         headers: {
@@ -166,10 +273,11 @@ class FirecrawlScraper {
           limit: maxPages,
           maxDepth: maxDepth,
           scrapeOptions: {
-            formats: ["markdown"],
+            formats: ["markdown", "links"],
             onlyMainContent: true,
           },
           includePaths: this.config.link_pattern ? [this.config.link_pattern] : undefined,
+          excludePaths: extractPdfs ? undefined : ["*.pdf"], // Exclude PDFs from crawl if not extracting
         }),
       });
 
@@ -180,11 +288,10 @@ class FirecrawlScraper {
 
       const crawlData = await crawlResponse.json();
       
-      // Firecrawl crawl is async, so we get a job ID
+      // Poll for crawl completion
       if (crawlData.id) {
         console.log(`[FirecrawlScraper] Crawl job started: ${crawlData.id}`);
         
-        // Poll for completion (max 5 minutes)
         const maxWait = 5 * 60 * 1000;
         const pollInterval = 5000;
         const startTime = Date.now();
@@ -209,6 +316,19 @@ class FirecrawlScraper {
             if (statusData.data && Array.isArray(statusData.data)) {
               for (const page of statusData.data) {
                 const pageUrl = page.metadata?.sourceURL || page.url || this.startUrl;
+                
+                // Collect PDF links from page content
+                if (extractPdfs && page.links) {
+                  for (const link of page.links) {
+                    if (this.isPdfUrl(link)) {
+                      discoveredPdfUrls.add(link);
+                    }
+                  }
+                }
+                
+                // Skip PDF pages in HTML crawl (we'll handle them separately)
+                if (this.isPdfUrl(pageUrl)) continue;
+                
                 pages.push({
                   url: pageUrl,
                   title: page.metadata?.title || page.title || "",
@@ -227,9 +347,32 @@ class FirecrawlScraper {
             break;
           }
         }
-      } else {
-        // Direct response (shouldn't happen with crawl)
-        console.log(`[FirecrawlScraper] Got direct response from Firecrawl`);
+      }
+
+      // Step 3: Scrape discovered PDFs
+      if (extractPdfs && discoveredPdfUrls.size > 0) {
+        console.log(`[FirecrawlScraper] Step 3: Extracting ${discoveredPdfUrls.size} PDF files...`);
+        
+        const pdfUrls = Array.from(discoveredPdfUrls).slice(0, maxPages); // Limit PDFs
+        let pdfCount = 0;
+        
+        for (const pdfUrl of pdfUrls) {
+          // Add small delay between PDF requests
+          if (pdfCount > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          
+          const pdfPage = await this.scrapePdf(pdfUrl);
+          if (pdfPage) {
+            pages.push(pdfPage);
+            pdfCount++;
+            console.log(`[FirecrawlScraper] Extracted PDF ${pdfCount}/${pdfUrls.length}: ${pdfUrl}`);
+          } else {
+            errors.push({ url: pdfUrl, error: "Failed to extract PDF content" });
+          }
+        }
+        
+        console.log(`[FirecrawlScraper] Successfully extracted ${pdfCount} PDF files`);
       }
 
     } catch (error) {
@@ -237,7 +380,7 @@ class FirecrawlScraper {
       console.error(`[FirecrawlScraper] Error: ${errMsg}`);
       errors.push({ url: this.startUrl, error: errMsg });
       
-      // Fallback: try single page scrape
+      // Fallback: try single page scrape with links extraction
       console.log(`[FirecrawlScraper] Attempting single page scrape fallback...`);
       try {
         const scrapeResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
@@ -267,8 +410,20 @@ class FirecrawlScraper {
               scraped_at: new Date().toISOString(),
               metadata: data.metadata,
             });
-            // Remove the error since we got content
             errors.pop();
+          }
+          
+          // Try to scrape PDFs from links
+          if (extractPdfs && data.links) {
+            const pdfLinks = (data.links as string[]).filter(l => this.isPdfUrl(l));
+            console.log(`[FirecrawlScraper] Found ${pdfLinks.length} PDFs in fallback mode`);
+            
+            for (const pdfUrl of pdfLinks.slice(0, 10)) { // Limit to 10 in fallback
+              const pdfPage = await this.scrapePdf(pdfUrl);
+              if (pdfPage) {
+                pages.push(pdfPage);
+              }
+            }
           }
         }
       } catch (fallbackError) {
@@ -276,7 +431,7 @@ class FirecrawlScraper {
       }
     }
 
-    console.log(`[FirecrawlScraper] Completed: ${pages.length} pages scraped, ${errors.length} errors`);
+    console.log(`[FirecrawlScraper] Completed: ${pages.length} pages scraped (incl. PDFs), ${errors.length} errors`);
 
     return { pages, errors };
   }

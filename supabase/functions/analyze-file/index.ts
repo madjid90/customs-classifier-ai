@@ -68,27 +68,27 @@ interface FileAnalysis {
   contentPreview: string;
 }
 
-// Extract text from base64 PDF using Lovable AI vision
+// Extract text from base64 PDF using OpenAI vision
 async function extractTextFromPDF(base64Content: string, filename: string): Promise<string> {
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
   
-  if (!LOVABLE_API_KEY) {
-    console.log("[analyze-file] No LOVABLE_API_KEY, cannot process PDF");
+  if (!OPENAI_API_KEY) {
+    console.log("[analyze-file] No OPENAI_API_KEY, cannot process PDF");
     return `[PDF non traité: ${filename}]`;
   }
 
   try {
     console.log(`[analyze-file] Extracting text from PDF: ${filename}`);
     
-    // Use Gemini vision model to extract text from PDF
-    const response = await fetch("https://api.lovable.dev/v1/chat/completions", {
+    // Use GPT-4o vision model to extract text from PDF
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: "gpt-4o",
         messages: [
           {
             role: "user",
@@ -122,8 +122,8 @@ Commence directement l'extraction sans introduction.`
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("[analyze-file] Lovable API error:", response.status, errorText);
-      throw new Error(`Lovable API error: ${response.status}`);
+      console.error("[analyze-file] OpenAI API error:", response.status, errorText);
+      throw new Error(`OpenAI API error: ${response.status}`);
     }
 
     const data = await response.json();
@@ -140,10 +140,10 @@ Commence directement l'extraction sans introduction.`
 
 // Extract HS codes using AI with tool calling for structured output
 async function extractHSCodesWithAI(content: string, filename: string): Promise<Array<{code_10: string; label_fr: string}>> {
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
   
-  if (!LOVABLE_API_KEY) {
-    console.log("[analyze-file] No LOVABLE_API_KEY, cannot extract HS codes with AI");
+  if (!OPENAI_API_KEY) {
+    console.log("[analyze-file] No OPENAI_API_KEY, cannot extract HS codes with AI");
     return [];
   }
 
@@ -154,26 +154,26 @@ async function extractHSCodesWithAI(content: string, filename: string): Promise<
     const MAX_CONTENT = 30000;
     const contentToProcess = content.length > MAX_CONTENT ? content.slice(0, MAX_CONTENT) : content;
     
-    const response = await fetch("https://api.lovable.dev/v1/chat/completions", {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: "gpt-4o",
         messages: [
           {
             role: "system",
             content: `Tu es un expert en nomenclature douanière. Extrait TOUS les codes HS (Système Harmonisé) de ce document.
 
 RÈGLES IMPORTANTES:
-- Les codes HS ont entre 6 et 10 chiffres
+- Les codes HS ont entre 4 et 10 chiffres, avec des points comme séparateurs (ex: 0201.10.00.11)
 - Normalise tous les codes à 10 chiffres en ajoutant des 0 à la fin si nécessaire
 - Pour chaque code, associe le libellé ou la désignation du produit
-- Si plusieurs codes sont associés à un même produit, crée une entrée pour chaque code
+- Si un code a des sous-positions (ex: 1.11, 1.19), combine-les avec le code parent
 - Ignore les codes qui ne sont clairement pas des codes HS (numéros de téléphone, dates, etc.)
-- Si un code commence par "EX", c'est quand même un code HS valide`
+- Si un code commence par "EX", c'est quand même un code HS valide, retire juste le EX`
           },
           {
             role: "user",
@@ -196,7 +196,7 @@ RÈGLES IMPORTANTES:
                       properties: {
                         code_10: { 
                           type: "string", 
-                          description: "Code HS normalisé à 10 chiffres" 
+                          description: "Code HS normalisé à 10 chiffres (sans points ni espaces)" 
                         },
                         label_fr: { 
                           type: "string", 
@@ -220,7 +220,7 @@ RÈGLES IMPORTANTES:
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("[analyze-file] Lovable API error for HS extraction:", response.status, errorText);
+      console.error("[analyze-file] OpenAI API error for HS extraction:", response.status, errorText);
       return [];
     }
 
@@ -291,17 +291,17 @@ async function analyzeWithAI(content: string, filename: string): Promise<FileAna
   }
 
   // If confidence is low, use AI for deeper analysis
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (bestMatch.confidence < 50 && LOVABLE_API_KEY) {
+  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+  if (bestMatch.confidence < 50 && OPENAI_API_KEY) {
     try {
-      const aiResponse = await fetch("https://api.lovable.dev/v1/chat/completions", {
+      const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+          "Authorization": `Bearer ${OPENAI_API_KEY}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
+          model: "gpt-4o-mini",
           messages: [
             {
               role: "system",

@@ -68,27 +68,27 @@ interface FileAnalysis {
   contentPreview: string;
 }
 
-// Extract text from base64 PDF using OpenAI vision
+// Extract text from base64 PDF using Lovable AI Gateway
 async function extractTextFromPDF(base64Content: string, filename: string): Promise<string> {
-  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   
-  if (!OPENAI_API_KEY) {
-    console.log("[analyze-file] No OPENAI_API_KEY, cannot process PDF");
+  if (!LOVABLE_API_KEY) {
+    console.log("[analyze-file] No LOVABLE_API_KEY, cannot process PDF");
     return `[PDF non traité: ${filename}]`;
   }
 
   try {
     console.log(`[analyze-file] Extracting text from PDF: ${filename}`);
     
-    // Use GPT-4o vision model to extract text from PDF
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    // Use Lovable AI Gateway with Gemini vision model
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o",
+        model: "google/gemini-2.5-flash",
         messages: [
           {
             role: "user",
@@ -122,8 +122,14 @@ Commence directement l'extraction sans introduction.`
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("[analyze-file] OpenAI API error:", response.status, errorText);
-      throw new Error(`OpenAI API error: ${response.status}`);
+      console.error("[analyze-file] Lovable AI error:", response.status, errorText);
+      if (response.status === 429) {
+        throw new Error("Rate limit exceeded - please try again later");
+      }
+      if (response.status === 402) {
+        throw new Error("Payment required - please add credits to your workspace");
+      }
+      throw new Error(`Lovable AI error: ${response.status}`);
     }
 
     const data = await response.json();
@@ -140,10 +146,10 @@ Commence directement l'extraction sans introduction.`
 
 // Extract HS codes using AI with tool calling for structured output
 async function extractHSCodesWithAI(content: string, filename: string): Promise<Array<{code_10: string; label_fr: string}>> {
-  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   
-  if (!OPENAI_API_KEY) {
-    console.log("[analyze-file] No OPENAI_API_KEY, cannot extract HS codes with AI");
+  if (!LOVABLE_API_KEY) {
+    console.log("[analyze-file] No LOVABLE_API_KEY, cannot extract HS codes with AI");
     return [];
   }
 
@@ -154,14 +160,14 @@ async function extractHSCodesWithAI(content: string, filename: string): Promise<
     const MAX_CONTENT = 30000;
     const contentToProcess = content.length > MAX_CONTENT ? content.slice(0, MAX_CONTENT) : content;
     
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o",
+        model: "google/gemini-2.5-flash",
         messages: [
           {
             role: "system",
@@ -220,7 +226,13 @@ RÈGLES IMPORTANTES:
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("[analyze-file] OpenAI API error for HS extraction:", response.status, errorText);
+      console.error("[analyze-file] Lovable AI error for HS extraction:", response.status, errorText);
+      if (response.status === 429) {
+        console.error("[analyze-file] Rate limit exceeded");
+      }
+      if (response.status === 402) {
+        console.error("[analyze-file] Payment required");
+      }
       return [];
     }
 
@@ -291,17 +303,17 @@ async function analyzeWithAI(content: string, filename: string): Promise<FileAna
   }
 
   // If confidence is low, use AI for deeper analysis
-  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-  if (bestMatch.confidence < 50 && OPENAI_API_KEY) {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (bestMatch.confidence < 50 && LOVABLE_API_KEY) {
     try {
-      const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+      const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+          "Authorization": `Bearer ${LOVABLE_API_KEY}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: "google/gemini-2.5-flash-lite",
           messages: [
             {
               role: "system",

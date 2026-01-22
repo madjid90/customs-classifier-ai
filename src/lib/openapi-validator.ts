@@ -5,6 +5,7 @@
  * Only active in development mode by default.
  */
 
+import yaml from "js-yaml";
 import Ajv, { ValidateFunction } from "ajv";
 import addFormats from "ajv-formats";
 
@@ -40,14 +41,17 @@ export function getValidatorConfig(): ValidatorConfig {
   return { ...config };
 }
 
-// Load OpenAPI spec (lazy loaded)
+// Load OpenAPI spec (lazy loaded, browser-compatible)
 async function loadOpenApiSpec(): Promise<Record<string, unknown>> {
   if (openApiSpec) return openApiSpec;
 
   try {
-    // Dynamic import to avoid bundling in production if not needed
-    const SwaggerParser = (await import("@apidevtools/swagger-parser")).default;
-    openApiSpec = await SwaggerParser.bundle("/openapi.yaml") as Record<string, unknown>;
+    const response = await fetch("/openapi.yaml");
+    if (!response.ok) {
+      throw new Error(`Failed to load OpenAPI spec: ${response.statusText}`);
+    }
+    const text = await response.text();
+    openApiSpec = yaml.load(text) as Record<string, unknown>;
     
     // Initialize AJV
     ajv = new Ajv({ allErrors: true, strict: false });

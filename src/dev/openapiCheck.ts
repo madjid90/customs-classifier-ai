@@ -1,4 +1,4 @@
-import SwaggerParser from "@apidevtools/swagger-parser";
+import yaml from "js-yaml";
 import Ajv from "ajv";
 import addFormats from "ajv-formats";
 import axios from "axios";
@@ -6,6 +6,16 @@ import axios from "axios";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1`;
+
+// Browser-compatible OpenAPI loader
+async function loadOpenApiSpec(url: string): Promise<Record<string, unknown>> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to load OpenAPI spec: ${response.statusText}`);
+  }
+  const text = await response.text();
+  return yaml.load(text) as Record<string, unknown>;
+}
 
 export type CheckResult = {
   id: string;
@@ -130,7 +140,7 @@ function getHeaders() {
 
 export async function runOpenApiContractChecks(): Promise<CheckResult[]> {
   // 1) Load OpenAPI YAML
-  const openapi = await SwaggerParser.bundle("/openapi.yaml") as Record<string, unknown>;
+  const openapi = await loadOpenApiSpec("/openapi.yaml");
 
   // 2) AJV setup
   const ajv = new Ajv({ allErrors: true, strict: false });
@@ -493,7 +503,7 @@ export async function validateResponse(
   status: number,
   responseData: unknown
 ): Promise<{ valid: boolean; errors?: string }> {
-  const openapi = await SwaggerParser.bundle("/openapi.yaml") as Record<string, unknown>;
+  const openapi = await loadOpenApiSpec("/openapi.yaml");
   const ajv = new Ajv({ allErrors: true, strict: false });
   addFormats(ajv);
 

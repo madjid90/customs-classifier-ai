@@ -66,7 +66,11 @@ const STATUS_COLORS: Record<IngestionStatus, string> = {
   DISABLED: "bg-muted text-muted-foreground",
 };
 
-export function ImportHistory() {
+interface ImportHistoryProps {
+  refreshTrigger?: number;
+}
+
+export function ImportHistory({ refreshTrigger }: ImportHistoryProps) {
   const { toast } = useToast();
   const [ingestions, setIngestions] = useState<IngestionFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -76,7 +80,9 @@ export function ImportHistory() {
 
   useEffect(() => {
     fetchIngestions();
-    
+  }, [refreshTrigger]);
+
+  useEffect(() => {
     // Poll for updates if any ingestion is in progress
     const interval = setInterval(() => {
       if (ingestions.some((i) => ["EXTRACTING", "PARSING", "INDEXING"].includes(i.status))) {
@@ -85,7 +91,7 @@ export function ImportHistory() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [ingestions.length]);
+  }, [ingestions]);
 
   async function fetchIngestions() {
     try {

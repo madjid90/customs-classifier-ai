@@ -41,6 +41,7 @@ export default function AdminPage() {
     classificationsDone: 0,
   });
   const [isLoading, setIsLoading] = useState(true);
+  const [historyRefreshTrigger, setHistoryRefreshTrigger] = useState(0);
 
   useEffect(() => {
     fetchStats();
@@ -49,6 +50,11 @@ export default function AdminPage() {
     const interval = setInterval(fetchStats, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  function handleUploadComplete() {
+    fetchStats();
+    setHistoryRefreshTrigger((prev) => prev + 1);
+  }
 
   async function fetchStats() {
     setIsLoading(true);
@@ -246,12 +252,12 @@ export default function AdminPage() {
 
             {/* Upload Tab */}
             <TabsContent value="upload">
-              <SmartFileUpload onUploadComplete={fetchStats} />
+              <SmartFileUpload onUploadComplete={handleUploadComplete} />
             </TabsContent>
 
             {/* History Tab */}
             <TabsContent value="history">
-              <ImportHistory />
+              <ImportHistory refreshTrigger={historyRefreshTrigger} />
             </TabsContent>
 
             {/* Users Tab */}

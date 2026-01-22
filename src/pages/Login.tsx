@@ -162,18 +162,18 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-muted/30 px-4 py-8">
       <Card className="w-full max-w-md animate-fade-in">
-        <CardHeader className="text-center">
+        <CardHeader className="text-center px-4 sm:px-6">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <Shield className="h-6 w-6" />
           </div>
-          <CardTitle className="text-xl">Classification Douaniere</CardTitle>
-          <CardDescription>
+          <CardTitle className="text-lg sm:text-xl">Classification Douaniere</CardTitle>
+          <CardDescription className="text-sm">
             Plateforme de classification HS pour le Maroc
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-4 sm:px-6">
           {step === "phone" ? (
             <form onSubmit={handleSendOtp} className="space-y-4">
               <div className="space-y-2">
@@ -191,7 +191,7 @@ export default function LoginPage() {
                   Format: +33 6XX XX XX XX ou +212 6XX XX XX XX
                 </p>
               </div>
-              <Button type="submit" className="w-full" disabled={isLoading}>
+              <Button type="submit" className="w-full h-12 sm:h-10 text-base sm:text-sm" disabled={isLoading}>
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -207,14 +207,14 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={handleBack}
-                className="flex items-center text-sm text-muted-foreground hover:text-foreground transition-colors"
+                className="flex items-center text-sm text-muted-foreground hover:text-foreground transition-colors py-1"
               >
                 <ArrowLeft className="h-4 w-4 mr-1" />
                 Modifier le numero
               </button>
               
               <div className="text-center text-sm text-muted-foreground mb-4">
-                Code envoye au <span className="font-medium text-foreground">{phone}</span>
+                Code envoye au <span className="font-medium text-foreground break-all">{phone}</span>
               </div>
               
               <div className="space-y-2">
@@ -232,7 +232,7 @@ export default function LoginPage() {
                 />
               </div>
               
-              <Button type="submit" className="w-full" disabled={isLoading || otp.length !== 6}>
+              <Button type="submit" className="w-full h-12 sm:h-10 text-base sm:text-sm" disabled={isLoading || otp.length !== 6}>
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -243,15 +243,15 @@ export default function LoginPage() {
                 )}
               </Button>
               
-              <div className="text-center">
+              <div className="text-center py-2">
                 <button
                   type="button"
                   onClick={handleResendOtp}
                   disabled={countdown > 0 || isLoading}
-                  className={`text-sm ${
+                  className={`text-sm py-2 ${
                     countdown > 0
                       ? "text-muted-foreground cursor-not-allowed"
-                      : "text-primary hover:underline"
+                      : "text-primary hover:underline active:opacity-80"
                   }`}
                 >
                   {countdown > 0
@@ -263,12 +263,12 @@ export default function LoginPage() {
           )}
         </CardContent>
       </Card>
-      <div className="mt-4 text-center">
+      <div className="mt-6 text-center">
         <a 
           href="/guide" 
-          className="text-sm text-muted-foreground hover:text-primary transition-colors"
+          className="inline-flex items-center text-sm text-muted-foreground hover:text-primary transition-colors py-2"
         >
-          <BookOpen className="inline h-4 w-4 mr-1" />
+          <BookOpen className="h-4 w-4 mr-1" />
           Guide d'utilisation
         </a>
       </div>

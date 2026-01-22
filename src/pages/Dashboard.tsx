@@ -47,31 +47,31 @@ export default function DashboardPage() {
 
   return (
     <AppLayout>
-      <div className="container py-8">
+      <div className="container px-4 py-6 sm:py-8">
         {/* Welcome Section */}
-        <div className="mb-8">
-          <h1 className="text-2xl font-semibold text-foreground">
+        <div className="mb-6 sm:mb-8">
+          <h1 className="text-xl sm:text-2xl font-semibold text-foreground">
             Tableau de bord
           </h1>
-          <p className="text-muted-foreground">
+          <p className="text-sm sm:text-base text-muted-foreground">
             Bienvenue sur la plateforme de classification douaniere
           </p>
         </div>
 
         {/* Quick Actions */}
-        <div className="mb-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="mb-6 sm:mb-8 grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
           <Card className="card-interactive">
-            <CardHeader className="pb-3">
+            <CardHeader className="pb-3 px-4 sm:px-6">
               <CardTitle className="flex items-center gap-2 text-base">
                 <FolderPlus className="h-5 w-5 text-accent" />
                 Nouveau dossier
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-sm">
                 Creer un nouveau dossier de classification
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <Button asChild className="w-full">
+            <CardContent className="px-4 sm:px-6 pb-4">
+              <Button asChild className="w-full h-11 sm:h-10">
                 <Link to="/cases/new">
                   Commencer
                   <ArrowRight className="ml-2 h-4 w-4" />
@@ -81,17 +81,17 @@ export default function DashboardPage() {
           </Card>
 
           <Card className="card-interactive">
-            <CardHeader className="pb-3">
+            <CardHeader className="pb-3 px-4 sm:px-6">
               <CardTitle className="flex items-center gap-2 text-base">
                 <FileText className="h-5 w-5 text-accent" />
                 Historique
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-sm">
                 Consulter tous vos dossiers
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <Button asChild variant="secondary" className="w-full">
+            <CardContent className="px-4 sm:px-6 pb-4">
+              <Button asChild variant="secondary" className="w-full h-11 sm:h-10">
                 <Link to="/history">
                   Voir l'historique
                   <ArrowRight className="ml-2 h-4 w-4" />
@@ -103,13 +103,13 @@ export default function DashboardPage() {
 
         {/* Recent Cases */}
         <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Dossiers recents</CardTitle>
-            <CardDescription>
+          <CardHeader className="px-4 sm:px-6">
+            <CardTitle className="text-base sm:text-lg">Dossiers recents</CardTitle>
+            <CardDescription className="text-sm">
               Vos 10 derniers dossiers de classification
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-4 sm:px-6">
             {isLoading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -117,12 +117,12 @@ export default function DashboardPage() {
             ) : error ? (
               <div className="flex items-center justify-center gap-2 py-8 text-destructive">
                 <AlertCircle className="h-5 w-5" />
-                <span>{error}</span>
+                <span className="text-sm">{error}</span>
               </div>
             ) : recentCases.length === 0 ? (
               <div className="py-8 text-center text-muted-foreground">
                 <FileText className="mx-auto mb-2 h-8 w-8" />
-                <p>Aucun dossier pour le moment</p>
+                <p className="text-sm">Aucun dossier pour le moment</p>
                 <Button asChild variant="link" className="mt-2">
                   <Link to="/cases/new">Creer votre premier dossier</Link>
                 </Button>
@@ -133,20 +133,20 @@ export default function DashboardPage() {
                   <Link
                     key={caseItem.id}
                     to={getCaseLink(caseItem)}
-                    className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-muted/50"
+                    className="flex items-center justify-between rounded-lg border p-3 sm:p-4 transition-colors hover:bg-muted/50 active:bg-muted"
                   >
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium truncate">{caseItem.product_name}</p>
-                      <p className="text-sm text-muted-foreground">
+                    <div className="flex-1 min-w-0 mr-3">
+                      <p className="font-medium text-sm sm:text-base truncate">{caseItem.product_name}</p>
+                      <p className="text-xs sm:text-sm text-muted-foreground">
                         {caseItem.type_import_export === "import" ? "Import" : "Export"} - {caseItem.origin_country}
                       </p>
                     </div>
-                    <div className="flex items-center gap-4 ml-4">
+                    <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
                       <StatusBadge status={caseItem.status} />
-                      <span className="text-sm text-muted-foreground hidden sm:block">
+                      <span className="text-xs text-muted-foreground hidden sm:block">
                         {format(new Date(caseItem.created_at), "dd MMM yyyy", { locale: fr })}
                       </span>
-                      <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                      <ArrowRight className="h-4 w-4 text-muted-foreground hidden sm:block" />
                     </div>
                   </Link>
                 ))}

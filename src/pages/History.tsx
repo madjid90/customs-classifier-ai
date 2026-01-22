@@ -11,7 +11,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { getCases, getCaseDetail } from "@/lib/api-client";
+import { getCases, getCaseDetail, deleteCase } from "@/lib/api-client";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { supabase } from "@/integrations/supabase/client";
 import { Case, CaseStatus, CaseDetailResponse, AuditEntry, CASE_STATUS_LABELS, FILE_TYPE_LABELS } from "@/lib/types";
 import { useAuth } from "@/contexts/AuthContext";
@@ -27,7 +28,8 @@ import {
   User,
   Filter,
   X,
-  RefreshCw
+  RefreshCw,
+  Trash2
 } from "lucide-react";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -56,6 +58,9 @@ export default function HistoryPage() {
   const [selectedCase, setSelectedCase] = useState<CaseDetailResponse | null>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  
+  // Delete state
+  const [deletingCaseId, setDeletingCaseId] = useState<string | null>(null);
 
   const limit = 20;
 
@@ -191,6 +196,27 @@ export default function HistoryPage() {
         return `/cases/${caseItem.id}/result`;
       default:
         return `/cases/${caseItem.id}/analyze`;
+    }
+  };
+
+  const handleDeleteCase = async (caseId: string) => {
+    setDeletingCaseId(caseId);
+    try {
+      await deleteCase(caseId);
+      toast.success("Dossier supprimé avec succès");
+      // Remove from local state
+      setCases(prev => prev.filter(c => c.id !== caseId));
+      setTotal(prev => prev - 1);
+      // Close drawer if viewing deleted case
+      if (selectedCase?.case.id === caseId) {
+        setDrawerOpen(false);
+        setSelectedCase(null);
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "Erreur lors de la suppression");
+    } finally {
+      setDeletingCaseId(null);
     }
   };
 
@@ -448,16 +474,52 @@ export default function HistoryPage() {
                               {format(new Date(c.created_at), "dd/MM/yyyy")}
                             </td>
                             <td className="py-3">
-                              <Button 
-                                asChild 
-                                variant="ghost" 
-                                size="sm"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <Link to={getCaseLink(c)}>
-                                  Ouvrir <ArrowRight className="ml-1 h-4 w-4" />
-                                </Link>
-                              </Button>
+                              <div className="flex items-center gap-1">
+                                <Button 
+                                  asChild 
+                                  variant="ghost" 
+                                  size="sm"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <Link to={getCaseLink(c)}>
+                                    Ouvrir <ArrowRight className="ml-1 h-4 w-4" />
+                                  </Link>
+                                </Button>
+                                <AlertDialog>
+                                  <AlertDialogTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                      onClick={(e) => e.stopPropagation()}
+                                      disabled={deletingCaseId === c.id}
+                                    >
+                                      {deletingCaseId === c.id ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <Trash2 className="h-4 w-4" />
+                                      )}
+                                    </Button>
+                                  </AlertDialogTrigger>
+                                  <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>Supprimer ce dossier ?</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        Cette action est irréversible. Le dossier "{c.product_name}" et tous ses fichiers associés seront définitivement supprimés.
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                      <AlertDialogCancel>Annuler</AlertDialogCancel>
+                                      <AlertDialogAction
+                                        onClick={() => handleDeleteCase(c.id)}
+                                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                      >
+                                        Supprimer
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -470,19 +532,68 @@ export default function HistoryPage() {
                     {cases.map((c) => (
                       <div
                         key={c.id}
-                        className="rounded-lg border p-3 cursor-pointer hover:bg-muted/50 active:bg-muted transition-colors"
-                        onClick={() => handleOpenDetail(c)}
+                        className="rounded-lg border p-3 hover:bg-muted/50 active:bg-muted transition-colors"
                       >
-                        <div className="flex items-start justify-between gap-2 mb-1.5">
-                          <p className="font-medium text-sm truncate flex-1">{c.product_name}</p>
-                          <StatusBadge status={c.status} />
+                        <div 
+                          className="cursor-pointer"
+                          onClick={() => handleOpenDetail(c)}
+                        >
+                          <div className="flex items-start justify-between gap-2 mb-1.5">
+                            <p className="font-medium text-sm truncate flex-1">{c.product_name}</p>
+                            <StatusBadge status={c.status} />
+                          </div>
+                          <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                            <span>{c.type_import_export === "import" ? "Import" : "Export"}</span>
+                            <span>•</span>
+                            <span>{c.origin_country}</span>
+                            <span>•</span>
+                            <span>{format(new Date(c.created_at), "dd/MM/yy")}</span>
+                          </div>
                         </div>
-                        <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                          <span>{c.type_import_export === "import" ? "Import" : "Export"}</span>
-                          <span>•</span>
-                          <span>{c.origin_country}</span>
-                          <span>•</span>
-                          <span>{format(new Date(c.created_at), "dd/MM/yy")}</span>
+                        <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t">
+                          <Button 
+                            asChild 
+                            variant="outline" 
+                            size="sm"
+                            className="h-8 text-xs"
+                          >
+                            <Link to={getCaseLink(c)}>
+                              Ouvrir <ArrowRight className="ml-1 h-3 w-3" />
+                            </Link>
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
+                                disabled={deletingCaseId === c.id}
+                              >
+                                {deletingCaseId === c.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Supprimer ce dossier ?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Cette action est irréversible. Le dossier "{c.product_name}" et tous ses fichiers associés seront définitivement supprimés.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Annuler</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => handleDeleteCase(c.id)}
+                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                >
+                                  Supprimer
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
                         </div>
                       </div>
                     ))}

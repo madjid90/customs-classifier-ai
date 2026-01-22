@@ -135,6 +135,11 @@ export async function validateCase(caseId: string) {
   return axios.post(`${FUNCTIONS_URL}/cases/${caseId}/validate`, {}, { headers });
 }
 
+export async function deleteCase(caseId: string) {
+  const headers = getAuthHeaders();
+  return axios.delete(`${FUNCTIONS_URL}/cases/${caseId}`, { headers });
+}
+
 // ============================================================================
 // FILES ENDPOINTS
 // ============================================================================

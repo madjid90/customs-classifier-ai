@@ -96,5 +96,5 @@ verify_jwt = false
 [functions.analyze-file]
 verify_jwt = false
 
-[functions.auto-scraper]
+[functions.refresh-token]
 verify_jwt = false

@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { useDropzone } from "react-dropzone";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -54,9 +55,20 @@ const getFileIcon = (filename: string) => {
 
 export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () => void }) {
   const { toast } = useToast();
-  const { getAuthHeaders } = useAuth();
+  const { getAuthHeaders, logout } = useAuth();
+  const navigate = useNavigate();
   const [files, setFiles] = useState<DetectedFile[]>([]);
   const [isProcessingAll, setIsProcessingAll] = useState(false);
+
+  const handleAuthError = useCallback(() => {
+    toast({
+      title: "Session expirée",
+      description: "Veuillez vous reconnecter",
+      variant: "destructive",
+    });
+    logout();
+    navigate("/login");
+  }, [toast, logout, navigate]);
 
   const analyzeFileWithAI = async (file: File): Promise<{ type: string; database: string; confidence: number }> => {
     try {
@@ -65,6 +77,7 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
       
       const headers = getAuthHeaders();
       if (!headers.Authorization) {
+        handleAuthError();
         throw new Error("Non authentifié");
       }
 
@@ -84,6 +97,11 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
           }),
         }
       );
+
+      if (response.status === 401) {
+        handleAuthError();
+        throw new Error("Session expirée");
+      }
 
       if (!response.ok) {
         throw new Error(`Erreur ${response.status}`);
@@ -235,7 +253,10 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
 
     try {
       const headers = getAuthHeaders();
-      if (!headers.Authorization) throw new Error("Non authentifié");
+      if (!headers.Authorization) {
+        handleAuthError();
+        return;
+      }
 
       // Read file content
       const content = await readFileContent(fileItem.file);
@@ -261,6 +282,11 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
           }),
         }
       );
+
+      if (response.status === 401) {
+        handleAuthError();
+        return;
+      }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));

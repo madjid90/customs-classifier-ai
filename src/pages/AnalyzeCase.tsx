@@ -46,7 +46,16 @@ export default function AnalyzeCasePage() {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur de chargement");
+      // If 404, the case was deleted - redirect to history
+      const errorMessage = err instanceof Error ? err.message : "";
+      if (errorMessage.includes("404") || errorMessage.includes("non trouvé")) {
+        sonnerToast.info("Dossier supprimé", {
+          description: "Ce dossier n'existe plus.",
+        });
+        navigate("/history", { replace: true });
+        return;
+      }
+      setError(errorMessage || "Erreur de chargement");
     } finally {
       setIsLoading(false);
     }

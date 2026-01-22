@@ -56,9 +56,18 @@ export default function ResultPage() {
           navigate(`/cases/${caseId}/analyze`);
         }
       } catch (err) {
+        // If 404, the case was deleted - redirect to history
+        const errorMessage = err instanceof Error ? err.message : "";
+        if (errorMessage.includes("404") || errorMessage.includes("non trouvé")) {
+          sonnerToast.info("Dossier supprimé", {
+            description: "Ce dossier n'existe plus.",
+          });
+          navigate("/history", { replace: true });
+          return;
+        }
         toast({
           title: "Erreur",
-          description: err instanceof Error ? err.message : "Erreur de chargement",
+          description: errorMessage || "Erreur de chargement",
           variant: "destructive",
         });
       } finally {

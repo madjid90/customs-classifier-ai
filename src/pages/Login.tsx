@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
-import { Loader2, Shield, ArrowLeft, BookOpen } from "lucide-react";
+import { Loader2, Shield, ArrowLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useProtectedNavigation } from "@/hooks/useProtectedNavigation";
 import { PhoneInput } from "@/components/auth/PhoneInput";
@@ -263,15 +263,6 @@ export default function LoginPage() {
           )}
         </CardContent>
       </Card>
-      <div className="mt-6 text-center">
-        <a 
-          href="/guide" 
-          className="inline-flex items-center text-sm text-muted-foreground hover:text-primary transition-colors py-2"
-        >
-          <BookOpen className="h-4 w-4 mr-1" />
-          Guide d'utilisation
-        </a>
-      </div>
     </div>
   );
 }

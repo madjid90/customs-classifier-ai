@@ -59,11 +59,10 @@ export function useProtectedNavigation(): UseProtectedNavigationReturn {
   }, [isAuthenticated, navigate, storeRedirectPath]);
 
   const redirectAfterLogin = useCallback((defaultPath: string = "/dashboard") => {
-    // Priority: location state > sessionStorage > default
-    const targetPath = locationStatePath || getRedirectPath() || defaultPath;
+    // Always redirect to dashboard after login - no stored paths
     clearRedirectPath();
-    navigate(targetPath, { replace: true });
-  }, [locationStatePath, getRedirectPath, clearRedirectPath, navigate]);
+    navigate(defaultPath, { replace: true });
+  }, [clearRedirectPath, navigate]);
 
   return {
     navigateTo,

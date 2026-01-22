@@ -1076,6 +1076,7 @@ export type Database = {
         }[]
       }
       get_ingestion_stats: { Args: never; Returns: Json }
+      get_jwt_user_id: { Args: never; Returns: string }
       get_training_examples: {
         Args: { limit_count?: number }
         Returns: {
@@ -1097,6 +1098,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      is_jwt_admin: { Args: never; Returns: boolean }
       match_hs_codes: {
         Args: {
           match_count?: number

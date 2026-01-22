@@ -89,54 +89,54 @@ export default function NewCasePage() {
 
   return (
     <AppLayout>
-      <div className="container py-8">
+      <div className="container px-4 py-6 sm:py-8">
         <Breadcrumbs items={[{ label: "Nouveau dossier" }]} />
         
-        <div className="mx-auto mt-6 max-w-2xl">
+        <div className="mx-auto mt-4 sm:mt-6 max-w-2xl">
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+            <CardHeader className="px-4 sm:px-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
                 <Package className="h-5 w-5 text-accent" />
                 Nouveau dossier de classification
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-sm">
                 Renseignez les informations de base pour commencer l'analyse
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-6">
+            <CardContent className="px-4 sm:px-6">
+              <form onSubmit={handleSubmit} className="space-y-5 sm:space-y-6">
                 {/* Import/Export Type */}
                 <div className="space-y-3">
-                  <Label>Type d'operation</Label>
+                  <Label className="text-sm font-medium">Type d'operation</Label>
                   <RadioGroup
                     value={type}
                     onValueChange={(value) => setType(value as ImportExportType)}
-                    className="grid grid-cols-2 gap-4"
+                    className="grid grid-cols-1 sm:grid-cols-2 gap-3"
                   >
                     <Label
                       htmlFor="import"
-                      className={`flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors ${
+                      className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 sm:p-4 transition-colors ${
                         type === "import" ? "border-primary bg-primary/5" : "hover:bg-muted/50"
                       }`}
                     >
                       <RadioGroupItem value="import" id="import" />
-                      <ArrowDownCircle className="h-5 w-5 text-accent" />
-                      <div>
-                        <span className="font-medium">Import</span>
-                        <p className="text-sm text-muted-foreground">Marchandise entrant au Maroc</p>
+                      <ArrowDownCircle className="h-5 w-5 text-accent flex-shrink-0" />
+                      <div className="min-w-0">
+                        <span className="font-medium block">Import</span>
+                        <p className="text-xs sm:text-sm text-muted-foreground truncate">Marchandise entrant au Maroc</p>
                       </div>
                     </Label>
                     <Label
                       htmlFor="export"
-                      className={`flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors ${
+                      className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 sm:p-4 transition-colors ${
                         type === "export" ? "border-primary bg-primary/5" : "hover:bg-muted/50"
                       }`}
                     >
                       <RadioGroupItem value="export" id="export" />
-                      <ArrowUpCircle className="h-5 w-5 text-accent" />
-                      <div>
-                        <span className="font-medium">Export</span>
-                        <p className="text-sm text-muted-foreground">Marchandise sortant du Maroc</p>
+                      <ArrowUpCircle className="h-5 w-5 text-accent flex-shrink-0" />
+                      <div className="min-w-0">
+                        <span className="font-medium block">Export</span>
+                        <p className="text-xs sm:text-sm text-muted-foreground truncate">Marchandise sortant du Maroc</p>
                       </div>
                     </Label>
                   </RadioGroup>
@@ -144,16 +144,16 @@ export default function NewCasePage() {
 
                 {/* Country of Origin */}
                 <div className="space-y-2">
-                  <Label htmlFor="country">
+                  <Label htmlFor="country" className="text-sm font-medium">
                     Pays d'{type === "import" ? "origine" : "destination"}
                   </Label>
                   <Select value={country} onValueChange={setCountry}>
-                    <SelectTrigger id="country">
+                    <SelectTrigger id="country" className="h-11 sm:h-10">
                       <SelectValue placeholder="Selectionnez un pays" />
                     </SelectTrigger>
                     <SelectContent>
                       {COUNTRIES.map((c) => (
-                        <SelectItem key={c.code} value={c.code}>
+                        <SelectItem key={c.code} value={c.code} className="py-3 sm:py-2">
                           {c.name} ({c.code})
                         </SelectItem>
                       ))}
@@ -163,20 +163,21 @@ export default function NewCasePage() {
 
                 {/* Product Name */}
                 <div className="space-y-2">
-                  <Label htmlFor="product">Nom du produit</Label>
+                  <Label htmlFor="product" className="text-sm font-medium">Nom du produit</Label>
                   <Input
                     id="product"
-                    placeholder="Ex: Pieces detachees automobiles en aluminium"
+                    placeholder="Ex: Pieces detachees automobiles"
                     value={productName}
                     onChange={(e) => setProductName(e.target.value)}
                     maxLength={500}
+                    className="h-11 sm:h-10"
                   />
                   <p className="text-xs text-muted-foreground">
                     Decrivez le produit de maniere precise (3 a 500 caracteres)
                   </p>
                 </div>
 
-                <Button type="submit" className="w-full" disabled={isLoading}>
+                <Button type="submit" className="w-full h-12 sm:h-10 text-base sm:text-sm" disabled={isLoading}>
                   {isLoading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />

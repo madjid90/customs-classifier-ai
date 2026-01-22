@@ -17,7 +17,7 @@ export function AppLayout({
   return (
     <div className="min-h-screen bg-background">
       {showHeader && <AppHeader />}
-      <main className={showHeader ? "pt-16" : ""}>
+      <main className={showHeader ? "pt-14 sm:pt-16" : ""}>
         {children}
       </main>
     </div>

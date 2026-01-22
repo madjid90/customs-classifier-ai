@@ -209,55 +209,52 @@ export default function HistoryPage() {
 
   return (
     <AppLayout>
-      <div className="container py-8">
+      <div className="container px-4 py-6 sm:py-8">
         <Breadcrumbs items={[{ label: "Historique" }]} />
 
-        <div className="mt-6 space-y-6">
+        <div className="mt-4 sm:mt-6 space-y-4 sm:space-y-6">
           {/* Filters */}
           <Card>
-            <CardContent className="py-4">
-              <form onSubmit={handleSearch} className="space-y-4">
-                {/* Row 1: Search and Status */}
-                <div className="flex flex-wrap items-center gap-4">
-                  <div className="relative flex-1 min-w-[200px]">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      placeholder="Rechercher par nom de produit..."
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      className="pl-10"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Filter className="h-4 w-4 text-muted-foreground" />
-                    <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setOffset(0); }}>
-                      <SelectTrigger className="w-40">
-                        <SelectValue placeholder="Statut" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Tous les statuts</SelectItem>
-                        {STATUSES.map((s) => (
-                          <SelectItem key={s} value={s}>{CASE_STATUS_LABELS[s]}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+            <CardContent className="py-3 px-3 sm:py-4 sm:px-6">
+              <form onSubmit={handleSearch} className="space-y-3 sm:space-y-4">
+                {/* Search */}
+                <div className="relative w-full">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Rechercher..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="pl-10 h-11 sm:h-10"
+                  />
                 </div>
                 
-                {/* Row 2: Date filters and Created By */}
-                <div className="flex flex-wrap items-center gap-4">
+                {/* Filters Row */}
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                  <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setOffset(0); }}>
+                    <SelectTrigger className="w-full sm:w-36 h-10">
+                      <Filter className="h-4 w-4 mr-2 text-muted-foreground sm:hidden" />
+                      <SelectValue placeholder="Statut" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Tous les statuts</SelectItem>
+                      {STATUSES.map((s) => (
+                        <SelectItem key={s} value={s} className="py-3 sm:py-2">{CASE_STATUS_LABELS[s]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  
                   {/* Date From */}
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button
                         variant="outline"
                         className={cn(
-                          "w-[160px] justify-start text-left font-normal",
+                          "flex-1 sm:flex-none sm:w-[140px] h-10 justify-start text-left font-normal text-sm",
                           !dateFrom && "text-muted-foreground"
                         )}
                       >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {dateFrom ? format(dateFrom, "dd/MM/yyyy") : "Date debut"}
+                        <CalendarIcon className="mr-2 h-4 w-4 flex-shrink-0" />
+                        <span className="truncate">{dateFrom ? format(dateFrom, "dd/MM/yy") : "Debut"}</span>
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="start">
@@ -278,12 +275,12 @@ export default function HistoryPage() {
                       <Button
                         variant="outline"
                         className={cn(
-                          "w-[160px] justify-start text-left font-normal",
+                          "flex-1 sm:flex-none sm:w-[140px] h-10 justify-start text-left font-normal text-sm",
                           !dateTo && "text-muted-foreground"
                         )}
                       >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {dateTo ? format(dateTo, "dd/MM/yyyy") : "Date fin"}
+                        <CalendarIcon className="mr-2 h-4 w-4 flex-shrink-0" />
+                        <span className="truncate">{dateTo ? format(dateTo, "dd/MM/yy") : "Fin"}</span>
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="start">
@@ -300,28 +297,29 @@ export default function HistoryPage() {
                   
                   {/* Created By Filter - Only for managers/admins */}
                   {canFilterByUser && (
-                    <div className="flex items-center gap-2">
-                      <User className="h-4 w-4 text-muted-foreground" />
-                      <Select value={createdByFilter} onValueChange={(v) => { setCreatedByFilter(v); setOffset(0); }}>
-                        <SelectTrigger className="w-[180px]">
-                          <SelectValue placeholder="Cree par" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Tous les utilisateurs</SelectItem>
-                          <SelectItem value="me">Mes dossiers</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    <Select value={createdByFilter} onValueChange={(v) => { setCreatedByFilter(v); setOffset(0); }}>
+                      <SelectTrigger className="w-full sm:w-[160px] h-10">
+                        <User className="h-4 w-4 mr-2 text-muted-foreground sm:hidden" />
+                        <SelectValue placeholder="Cree par" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all" className="py-3 sm:py-2">Tous</SelectItem>
+                        <SelectItem value="me" className="py-3 sm:py-2">Mes dossiers</SelectItem>
+                      </SelectContent>
+                    </Select>
                   )}
-                  
-                  <Button type="submit" variant="secondary">
+                </div>
+                
+                {/* Action Buttons */}
+                <div className="flex items-center gap-2">
+                  <Button type="submit" variant="secondary" className="flex-1 sm:flex-none h-10">
                     Rechercher
                   </Button>
                   
                   {hasActiveFilters && (
-                    <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
+                    <Button type="button" variant="ghost" size="sm" onClick={clearFilters} className="h-10">
                       <X className="mr-1 h-4 w-4" />
-                      Effacer
+                      <span className="hidden sm:inline">Effacer</span>
                     </Button>
                   )}
                 </div>
@@ -331,18 +329,18 @@ export default function HistoryPage() {
 
           {/* Results */}
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader className="pb-3 px-4 sm:px-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle className="text-lg">Dossiers</CardTitle>
-                  <CardDescription>
+                  <CardTitle className="text-base sm:text-lg">Dossiers</CardTitle>
+                  <CardDescription className="text-sm">
                     {total} dossier{total !== 1 ? "s" : ""} trouvé{total !== 1 ? "s" : ""}
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
                   {realtimeConnected && (
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                    <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
                       Temps réel
                     </div>
                   )}
@@ -351,13 +349,14 @@ export default function HistoryPage() {
                     size="sm"
                     onClick={() => fetchCases()}
                     disabled={isLoading}
+                    className="h-9 w-9 p-0"
                   >
                     <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
                   </Button>
                 </div>
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="px-4 sm:px-6">
               {isLoading ? (
                 <>
                   {/* Desktop table skeleton */}
@@ -391,33 +390,33 @@ export default function HistoryPage() {
                   {/* Mobile cards skeleton */}
                   <div className="space-y-3 md:hidden">
                     {[1, 2, 3, 4].map((i) => (
-                      <div key={i} className="rounded-lg border p-4">
+                      <div key={i} className="rounded-lg border p-3">
                         <div className="flex items-start justify-between mb-2">
-                          <Skeleton className="h-5 w-40" />
-                          <Skeleton className="h-6 w-20 rounded-full" />
+                          <Skeleton className="h-5 w-32" />
+                          <Skeleton className="h-5 w-16 rounded-full" />
                         </div>
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-3">
+                          <Skeleton className="h-4 w-12" />
+                          <Skeleton className="h-4 w-8" />
                           <Skeleton className="h-4 w-16" />
-                          <Skeleton className="h-4 w-20" />
-                          <Skeleton className="h-4 w-24" />
                         </div>
                       </div>
                     ))}
                   </div>
                   
                   {/* Pagination skeleton */}
-                  <div className="mt-6 flex items-center justify-between">
-                    <Skeleton className="h-4 w-48" />
+                  <div className="mt-4 sm:mt-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <Skeleton className="h-4 w-36" />
                     <div className="flex gap-2">
-                      <Skeleton className="h-9 w-28" />
-                      <Skeleton className="h-9 w-24" />
+                      <Skeleton className="h-10 w-24" />
+                      <Skeleton className="h-10 w-20" />
                     </div>
                   </div>
                 </>
               ) : cases.length === 0 ? (
                 <div className="py-8 text-center text-muted-foreground">
                   <FileText className="mx-auto mb-2 h-8 w-8" />
-                  <p>Aucun dossier trouve</p>
+                  <p className="text-sm">Aucun dossier trouve</p>
                 </div>
               ) : (
                 <>
@@ -467,49 +466,53 @@ export default function HistoryPage() {
                   </div>
 
                   {/* Mobile Cards */}
-                  <div className="space-y-3 md:hidden">
+                  <div className="space-y-2 md:hidden">
                     {cases.map((c) => (
                       <div
                         key={c.id}
-                        className="rounded-lg border p-4 cursor-pointer hover:bg-muted/50 transition-colors"
+                        className="rounded-lg border p-3 cursor-pointer hover:bg-muted/50 active:bg-muted transition-colors"
                         onClick={() => handleOpenDetail(c)}
                       >
-                        <div className="flex items-start justify-between mb-2">
-                          <p className="font-medium truncate flex-1 pr-2">{c.product_name}</p>
+                        <div className="flex items-start justify-between gap-2 mb-1.5">
+                          <p className="font-medium text-sm truncate flex-1">{c.product_name}</p>
                           <StatusBadge status={c.status} />
                         </div>
-                        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                        <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                           <span>{c.type_import_export === "import" ? "Import" : "Export"}</span>
+                          <span>•</span>
                           <span>{c.origin_country}</span>
-                          <span>{format(new Date(c.created_at), "dd/MM/yyyy")}</span>
+                          <span>•</span>
+                          <span>{format(new Date(c.created_at), "dd/MM/yy")}</span>
                         </div>
                       </div>
                     ))}
                   </div>
 
                   {/* Pagination */}
-                  <div className="mt-6 flex items-center justify-between">
-                    <p className="text-sm text-muted-foreground">
-                      Affichage {offset + 1} - {Math.min(offset + limit, total)} sur {total}
+                  <div className="mt-4 sm:mt-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <p className="text-xs sm:text-sm text-muted-foreground order-2 sm:order-1">
+                      {offset + 1} - {Math.min(offset + limit, total)} sur {total}
                     </p>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 order-1 sm:order-2 w-full sm:w-auto">
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => setOffset(Math.max(0, offset - limit))}
                         disabled={offset === 0}
+                        className="flex-1 sm:flex-none h-10"
                       >
-                        <ChevronLeft className="h-4 w-4" />
-                        Precedent
+                        <ChevronLeft className="h-4 w-4 sm:mr-1" />
+                        <span className="hidden sm:inline">Précédent</span>
                       </Button>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => setOffset(offset + limit)}
                         disabled={!hasMore}
+                        className="flex-1 sm:flex-none h-10"
                       >
-                        Suivant
-                        <ChevronRight className="h-4 w-4" />
+                        <span className="hidden sm:inline">Suivant</span>
+                        <ChevronRight className="h-4 w-4 sm:ml-1" />
                       </Button>
                     </div>
                   </div>
@@ -522,10 +525,10 @@ export default function HistoryPage() {
 
       {/* Detail Drawer */}
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
-        <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>Details du dossier</SheetTitle>
-            <SheetDescription>
+        <SheetContent className="w-full sm:max-w-lg overflow-y-auto p-4 sm:p-6">
+          <SheetHeader className="text-left">
+            <SheetTitle className="text-base sm:text-lg">Details du dossier</SheetTitle>
+            <SheetDescription className="text-sm">
               Informations completes et historique
             </SheetDescription>
           </SheetHeader>

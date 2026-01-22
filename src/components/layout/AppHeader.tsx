@@ -46,14 +46,14 @@ export function AppHeader() {
   };
 
   return (
-    <header className="app-header fixed top-0 left-0 right-0 z-50 h-16 border-b border-sidebar-border">
-      <div className="container flex h-full items-center justify-between px-4">
+    <header className="app-header fixed top-0 left-0 right-0 z-50 h-14 sm:h-16 border-b border-sidebar-border">
+      <div className="container flex h-full items-center justify-between px-3 sm:px-4">
         {/* Logo */}
         <Link to="/dashboard" className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded bg-accent text-accent-foreground font-bold text-sm">
             CD
           </div>
-          <span className="hidden font-semibold sm:block">
+          <span className="hidden font-semibold sm:block text-sm">
             Classification Douaniere
           </span>
         </Link>
@@ -145,8 +145,8 @@ export function AppHeader() {
 
       {/* Mobile Menu */}
       {mobileMenuOpen && (
-        <div className="absolute top-16 left-0 right-0 border-b border-sidebar-border bg-sidebar md:hidden">
-          <nav className="container flex flex-col gap-1 p-4">
+        <div className="absolute top-14 sm:top-16 left-0 right-0 border-b border-sidebar-border bg-sidebar md:hidden max-h-[calc(100vh-3.5rem)] overflow-y-auto">
+          <nav className="container flex flex-col gap-1 p-3 sm:p-4">
             {navItems.map((item) => {
               const isActive = location.pathname === item.href;
               return (
@@ -155,44 +155,49 @@ export function AppHeader() {
                   to={item.href}
                   onClick={() => setMobileMenuOpen(false)}
                   className={cn(
-                    "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    "flex items-center gap-3 rounded-md px-3 py-3 text-sm font-medium transition-colors active:bg-sidebar-accent",
                     isActive
                       ? "bg-sidebar-accent text-sidebar-accent-foreground"
                       : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50"
                   )}
                 >
-                  <item.icon className="h-4 w-4" />
+                  <item.icon className="h-5 w-5" />
                   {item.label}
                 </Link>
               );
             })}
-            {hasRole("admin") && adminNavItems.map((item) => {
-              const isActive = location.pathname.startsWith(item.href);
-              return (
-                <Link
-                  key={item.href}
-                  to={item.href}
-                  onClick={() => setMobileMenuOpen(false)}
-                  className={cn(
-                    "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                    isActive
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50"
-                  )}
-                >
-                  <item.icon className="h-4 w-4" />
-                  {item.label}
-                </Link>
-              );
-            })}
+            {hasRole("admin") && (
+              <>
+                <div className="my-2 border-t border-sidebar-border" />
+                {adminNavItems.map((item) => {
+                  const isActive = location.pathname.startsWith(item.href);
+                  return (
+                    <Link
+                      key={item.href}
+                      to={item.href}
+                      onClick={() => setMobileMenuOpen(false)}
+                      className={cn(
+                        "flex items-center gap-3 rounded-md px-3 py-3 text-sm font-medium transition-colors active:bg-sidebar-accent",
+                        isActive
+                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50"
+                      )}
+                    >
+                      <item.icon className="h-5 w-5" />
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </>
+            )}
             <div className="my-2 border-t border-sidebar-border" />
-            <div className="flex items-center justify-between px-3 py-2 text-sm text-sidebar-foreground/80">
-              <span>{user?.phone}</span>
+            <div className="flex items-center justify-between px-3 py-3 text-sm text-sidebar-foreground/80">
+              <span className="truncate max-w-[180px]">{user?.phone}</span>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={handleLogout}
-                className="text-destructive hover:text-destructive"
+                className="text-destructive hover:text-destructive h-9"
               >
                 <LogOut className="mr-2 h-4 w-4" />
                 Deconnexion

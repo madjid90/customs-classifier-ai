@@ -16,7 +16,7 @@ import AdminPage from "@/pages/Admin";
 import MonitoringPage from "@/pages/Monitoring";
 import NotFound from "@/pages/NotFound";
 import ForbiddenPage from "@/pages/Forbidden";
-import GuidePage from "@/pages/Guide";
+
 
 // Dev-only lazy import
 const DevOpenApiCheck = lazy(() => import("@/pages/DevOpenApiCheck"));
@@ -34,7 +34,7 @@ const App = () => (
             {/* Public routes */}
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/guide" element={<GuidePage />} />
+            
             
             {/* Protected routes - require authentication */}
             <Route path="/dashboard" element={

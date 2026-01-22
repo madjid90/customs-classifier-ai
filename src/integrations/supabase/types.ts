@@ -501,6 +501,7 @@ export type Database = {
           active_version_label: string
           chapter_2: string
           code_10: string
+          code_14: string | null
           code_4: string | null
           code_6: string
           created_at: string
@@ -518,6 +519,7 @@ export type Database = {
           active_version_label: string
           chapter_2: string
           code_10: string
+          code_14?: string | null
           code_4?: string | null
           code_6: string
           created_at?: string
@@ -535,6 +537,7 @@ export type Database = {
           active_version_label?: string
           chapter_2?: string
           code_10?: string
+          code_14?: string | null
           code_4?: string | null
           code_6?: string
           created_at?: string

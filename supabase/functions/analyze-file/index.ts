@@ -144,8 +144,17 @@ Commence directement l'extraction sans introduction.`
   }
 }
 
+// Interface for extracted HS codes with Moroccan 14-digit extension
+interface ExtractedHSCode {
+  code_10: string;
+  code_14?: string;
+  label_fr: string;
+  unit?: string;
+  droit?: number;
+}
+
 // Extract HS codes using AI with tool calling for structured output
-async function extractHSCodesWithAI(content: string, filename: string): Promise<Array<{code_10: string; label_fr: string}>> {
+async function extractHSCodesWithAI(content: string, filename: string): Promise<ExtractedHSCode[]> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   
   if (!LOVABLE_API_KEY) {
@@ -171,19 +180,26 @@ async function extractHSCodesWithAI(content: string, filename: string): Promise<
         messages: [
           {
             role: "system",
-            content: `Tu es un expert en nomenclature douanière. Extrait TOUS les codes HS (Système Harmonisé) de ce document.
+            content: `Tu es un expert en nomenclature douanière marocaine. Extrait TOUS les codes HS de ce document.
 
-RÈGLES IMPORTANTES:
-- Les codes HS ont entre 4 et 10 chiffres, avec des points comme séparateurs (ex: 0201.10.00.11)
-- Normalise tous les codes à 10 chiffres en ajoutant des 0 à la fin si nécessaire
-- Pour chaque code, associe le libellé ou la désignation du produit
-- Si un code a des sous-positions (ex: 1.11, 1.19), combine-les avec le code parent
-- Ignore les codes qui ne sont clairement pas des codes HS (numéros de téléphone, dates, etc.)
-- Si un code commence par "EX", c'est quand même un code HS valide, retire juste le EX`
+FORMAT MAROCAIN - La colonne "Codification" contient 5 sous-colonnes formant un code à 14 chiffres:
+- Colonne 1: 4 chiffres (position HS internationale, ex: 0101)
+- Colonne 2: 2 chiffres (sous-position, ex: 21)
+- Colonne 3: 2 chiffres (extension, ex: 00)
+- Colonne 4: 2 chiffres (extension nationale, ex: 00)
+- Colonne 5: 4 chiffres (extension marocaine, ex: 0000) - OPTIONNEL
+
+RÈGLES:
+- Extrait le code COMPLET tel qu'il apparaît (jusqu'à 14 chiffres si disponible)
+- Si le code n'a que 10 chiffres, c'est normal (code_14 sera null)
+- Retire les points et espaces pour obtenir le code numérique
+- Pour chaque code, extrait aussi le libellé, l'unité et le taux de droit si disponible
+- Ignore les lignes de titre sans code numérique
+- Si un code commence par "EX", retire le EX mais garde le code`
           },
           {
             role: "user",
-            content: `Extrait tous les codes HS de ce document:\n\n${contentToProcess}`
+            content: `Extrait tous les codes HS de ce document tarifaire marocain:\n\n${contentToProcess}`
           }
         ],
         tools: [
@@ -191,7 +207,7 @@ RÈGLES IMPORTANTES:
             type: "function",
             function: {
               name: "extract_hs_codes",
-              description: "Extrait les codes HS et leurs libellés du document",
+              description: "Extrait les codes HS marocains et leurs métadonnées",
               parameters: {
                 type: "object",
                 properties: {
@@ -200,16 +216,24 @@ RÈGLES IMPORTANTES:
                     items: {
                       type: "object",
                       properties: {
-                        code_10: { 
+                        code_raw: { 
                           type: "string", 
-                          description: "Code HS normalisé à 10 chiffres (sans points ni espaces)" 
+                          description: "Code tel qu'extrait du document (avec ou sans points/espaces)" 
                         },
                         label_fr: { 
                           type: "string", 
                           description: "Désignation ou libellé du produit en français" 
+                        },
+                        unit: {
+                          type: "string",
+                          description: "Unité de mesure (u, kg, l, etc.)"
+                        },
+                        droit: {
+                          type: "number",
+                          description: "Taux de droit de douane en pourcentage"
                         }
                       },
-                      required: ["code_10", "label_fr"]
+                      required: ["code_raw", "label_fr"]
                     }
                   }
                 },
@@ -246,19 +270,49 @@ RÈGLES IMPORTANTES:
         const codes = parsed.codes || [];
         
         // Validate and normalize codes
-        const validCodes = codes
-          .filter((c: any) => c.code_10 && c.label_fr)
-          .map((c: any) => ({
-            code_10: c.code_10.replace(/\D/g, '').padEnd(10, '0').slice(0, 10),
-            label_fr: c.label_fr.trim()
-          }))
+        const validCodes: ExtractedHSCode[] = codes
+          .filter((c: any) => c.code_raw && c.label_fr)
+          .map((c: any) => {
+            // Remove all non-digits
+            const cleanCode = c.code_raw.replace(/\D/g, '');
+            
+            // Determine code_10 and code_14
+            let code_10: string;
+            let code_14: string | undefined;
+            
+            if (cleanCode.length >= 14) {
+              // Full 14-digit Moroccan code
+              code_14 = cleanCode.slice(0, 14);
+              code_10 = cleanCode.slice(0, 10);
+            } else if (cleanCode.length > 10) {
+              // Between 10 and 14 digits - pad to 14
+              code_14 = cleanCode.padEnd(14, '0').slice(0, 14);
+              code_10 = cleanCode.slice(0, 10);
+            } else if (cleanCode.length >= 6) {
+              // Standard code - normalize to 10 digits
+              code_10 = cleanCode.padEnd(10, '0').slice(0, 10);
+              code_14 = undefined;
+            } else {
+              // Too short, skip
+              return null;
+            }
+            
+            return {
+              code_10,
+              code_14,
+              label_fr: c.label_fr.trim(),
+              unit: c.unit?.trim(),
+              droit: typeof c.droit === 'number' ? c.droit : undefined
+            };
+          })
           .filter((c: any) => {
-            // Validate: should be 10 digits and chapter should be 01-99
+            if (!c) return false;
+            // Validate: chapter should be 01-99
             const chapter = parseInt(c.code_10.slice(0, 2), 10);
             return c.code_10.length === 10 && chapter >= 1 && chapter <= 99;
           });
         
-        console.log(`[analyze-file] AI extracted ${validCodes.length} valid HS codes`);
+        console.log(`[analyze-file] AI extracted ${validCodes.length} valid HS codes (with code_14 support)`);
         return validCodes;
       } catch (e) {
         console.error("[analyze-file] Error parsing HS codes response:", e);
@@ -411,20 +465,25 @@ async function processAndStore(
       const extractedCodes = await extractHSCodesWithAI(content, filename);
       
       if (extractedCodes.length > 0) {
-        // Deduplicate by code_10
-        const uniqueCodes = new Map<string, typeof extractedCodes[0]>();
+        // Deduplicate by code_10 (prefer entries with code_14)
+        const uniqueCodes = new Map<string, ExtractedHSCode>();
         for (const code of extractedCodes) {
-          if (!uniqueCodes.has(code.code_10)) {
+          const existing = uniqueCodes.get(code.code_10);
+          // Keep the one with code_14, or the first one if neither has it
+          if (!existing || (code.code_14 && !existing.code_14)) {
             uniqueCodes.set(code.code_10, code);
           }
         }
         
         const records = Array.from(uniqueCodes.values()).map(code => ({
           code_10: code.code_10,
+          code_14: code.code_14 || null,
           code_6: code.code_10.slice(0, 6),
           // code_4 is a generated column, do not include it
           chapter_2: code.code_10.slice(0, 2),
           label_fr: code.label_fr.slice(0, 500),
+          unit: code.unit || null,
+          taxes: code.droit ? { droit_import: code.droit } : null,
           active: true,
           active_version_label: versionLabel,
         }));

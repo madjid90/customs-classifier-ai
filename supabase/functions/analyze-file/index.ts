@@ -68,19 +68,152 @@ interface FileAnalysis {
   contentPreview: string;
 }
 
-// Extract text from base64 PDF using Lovable AI Gateway
-async function extractTextFromPDF(base64Content: string, filename: string): Promise<string> {
+// Interface for extracted HS codes with Moroccan 14-digit extension
+interface ExtractedHSCode {
+  code_10: string;
+  code_14?: string;
+  label_fr: string;
+  unit?: string;
+  droit?: number;
+  notes?: string;
+}
+
+// Validation result for HS codes
+interface HSCodeValidation {
+  isValid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+// Validate HS code structure and logic
+function validateHSCode(code: ExtractedHSCode): HSCodeValidation {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  
+  // Check code_10 format
+  if (!code.code_10 || !/^\d{10}$/.test(code.code_10)) {
+    errors.push(`code_10 invalide: ${code.code_10}`);
+  }
+  
+  // Check chapter (01-99)
+  const chapter = parseInt(code.code_10?.slice(0, 2) || "0", 10);
+  if (chapter < 1 || chapter > 99) {
+    errors.push(`Chapitre invalide: ${chapter}`);
+  }
+  
+  // Check subheading (position 6 digits)
+  const subheading = code.code_10?.slice(0, 6) || "";
+  if (!/^\d{6}$/.test(subheading)) {
+    errors.push(`Sous-position invalide: ${subheading}`);
+  }
+  
+  // Check code_14 if present
+  if (code.code_14 && !/^\d{14}$/.test(code.code_14)) {
+    errors.push(`code_14 invalide: ${code.code_14}`);
+  }
+  
+  // Check code_14 starts with code_10
+  if (code.code_14 && !code.code_14.startsWith(code.code_10)) {
+    warnings.push(`code_14 ne commence pas par code_10`);
+  }
+  
+  // Check label
+  if (!code.label_fr || code.label_fr.length < 3) {
+    errors.push(`Libellé trop court ou manquant`);
+  }
+  
+  if (code.label_fr && code.label_fr.length > 500) {
+    warnings.push(`Libellé très long (${code.label_fr.length} chars)`);
+  }
+  
+  // Check for suspicious patterns in label
+  if (code.label_fr && /^[\d\s\.\-]+$/.test(code.label_fr)) {
+    errors.push(`Libellé contient uniquement des chiffres`);
+  }
+  
+  // Check unit if present
+  if (code.unit && !["u", "kg", "l", "m", "m2", "m3", "p/st", "tonne", "ct", "g", "pair", "paire", "1000u", "1000 u"].includes(code.unit.toLowerCase())) {
+    warnings.push(`Unité non standard: ${code.unit}`);
+  }
+  
+  // Check duty rate
+  if (code.droit !== undefined && (code.droit < 0 || code.droit > 200)) {
+    warnings.push(`Taux de droit inhabituel: ${code.droit}%`);
+  }
+  
+  return {
+    isValid: errors.length === 0,
+    errors,
+    warnings
+  };
+}
+
+// Specialized OCR prompt for Moroccan tariff documents
+const MOROCCAN_TARIFF_OCR_PROMPT = `Tu es un expert OCR spécialisé dans les tarifs douaniers marocains.
+
+STRUCTURE DU DOCUMENT:
+Le tarif douanier marocain est structuré en TABLEAU avec ces colonnes:
+1. CODIFICATION (5 sous-colonnes):
+   - Colonne 1: Position (4 chiffres, ex: 0101)
+   - Colonne 2: Sous-position (2 chiffres, ex: 21)
+   - Colonne 3: Extension (2 chiffres, ex: 00)
+   - Colonne 4: Extension nationale (2 chiffres, ex: 10)
+   - Colonne 5: Extension marocaine (4 chiffres, ex: 0000) - OPTIONNEL
+2. DESIGNATION DES PRODUITS (libellé en français)
+3. UNITE (u, kg, l, m, m2, etc.)
+4. DROITS D'IMPORTATION (pourcentage)
+
+RÈGLES D'EXTRACTION OCR:
+1. PRÉSERVE la structure exacte du tableau
+2. CHAQUE LIGNE = une entrée de code HS
+3. Les tirets "- - -" indiquent un niveau de sous-classification
+4. "EX" devant un code = exception, garde le code sans le préfixe EX
+5. Les notes de bas de page (a), (b), etc. sont des restrictions
+
+FORMAT DE SORTIE:
+Transcris le tableau ligne par ligne au format:
+CODE | DESIGNATION | UNITE | DROIT
+
+Exemple:
+0101.21.00.00 | Chevaux reproducteurs de race pure | u | 2,5
+0101.21.00.10 | - - Chevaux arabes | u | 0
+0101.29.00.00 | Autres chevaux | u | 17,5
+
+COMMENCE L'EXTRACTION:`;
+
+// Specialized OCR prompt for multi-page processing
+const MULTI_PAGE_OCR_PROMPT = `Tu es un expert OCR spécialisé dans les tarifs douaniers.
+
+Cette page fait partie d'un document plus large. Extrait TOUT le contenu de cette page.
+
+INSTRUCTIONS:
+1. Extrait CHAQUE ligne du tableau de codes HS
+2. Préserve les codes numériques EXACTEMENT comme ils apparaissent
+3. Si un code est coupé entre pages, extrait ce qui est visible
+4. Préserve les notes de section/chapitre
+5. Format: CODE | DESIGNATION | UNITE | DROIT
+
+Important: 
+- Ne pas ignorer les lignes avec des tirets "- - -" (sous-classifications)
+- Les codes peuvent avoir 6, 8, 10 ou 14 chiffres
+- Extraire aussi les notes de restrictions
+
+Début de l'extraction:`;
+
+// Extract text from PDF with multi-page support
+async function extractTextFromPDFMultiPage(base64Content: string, filename: string): Promise<{ pages: string[]; fullText: string }> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   
   if (!LOVABLE_API_KEY) {
     console.log("[analyze-file] No LOVABLE_API_KEY, cannot process PDF");
-    return `[PDF non traité: ${filename}]`;
+    return { pages: [], fullText: `[PDF non traité: ${filename}]` };
   }
 
   try {
-    console.log(`[analyze-file] Extracting text from PDF: ${filename}`);
+    console.log(`[analyze-file] Extracting text from PDF with multi-page support: ${filename}`);
     
-    // Use Lovable AI Gateway with Gemini vision model
+    // For now, process the entire PDF as one unit
+    // Use specialized tariff prompt
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -95,16 +228,7 @@ async function extractTextFromPDF(base64Content: string, filename: string): Prom
             content: [
               {
                 type: "text",
-                text: `Extrait et transcris TOUT le texte de ce document PDF. 
-                
-IMPORTANT:
-- Extrait le texte tel quel, sans résumer ni reformuler
-- Préserve la structure (tableaux, listes, colonnes)
-- Si c'est une liste de codes HS ou de produits, extrait chaque ligne avec son code et son libellé
-- Format de sortie: texte brut, un élément par ligne
-- Si tu vois des codes numériques (comme 0101.21.00), garde-les exactement
-
-Commence directement l'extraction sans introduction.`
+                text: MOROCCAN_TARIFF_OCR_PROMPT
               },
               {
                 type: "image_url",
@@ -115,7 +239,7 @@ Commence directement l'extraction sans introduction.`
             ]
           }
         ],
-        max_tokens: 16000,
+        max_tokens: 32000, // Increased for larger documents
         temperature: 0.1,
       }),
     });
@@ -135,39 +259,47 @@ Commence directement l'extraction sans introduction.`
     const data = await response.json();
     const extractedText = data.choices?.[0]?.message?.content || "";
     
-    console.log(`[analyze-file] Extracted ${extractedText.length} chars from PDF`);
+    console.log(`[analyze-file] Extracted ${extractedText.length} chars from PDF (multi-page)`);
     
-    return extractedText;
+    // Split by page markers if present
+    const pageMarkers = extractedText.split(/(?:---\s*Page\s*\d+\s*---|===\s*Page\s*\d+\s*===|\[Page\s*\d+\])/i);
+    const pages = pageMarkers.length > 1 ? pageMarkers.filter((p: string) => p.trim().length > 0) : [extractedText];
+    
+    return {
+      pages,
+      fullText: extractedText
+    };
   } catch (e) {
     console.error("[analyze-file] PDF extraction error:", e);
-    return `[Erreur extraction PDF: ${filename}]`;
+    return { pages: [], fullText: `[Erreur extraction PDF: ${filename}]` };
   }
 }
 
-// Interface for extracted HS codes with Moroccan 14-digit extension
-interface ExtractedHSCode {
-  code_10: string;
-  code_14?: string;
-  label_fr: string;
-  unit?: string;
-  droit?: number;
+// Legacy single extraction function (kept for compatibility)
+async function extractTextFromPDF(base64Content: string, filename: string): Promise<string> {
+  const result = await extractTextFromPDFMultiPage(base64Content, filename);
+  return result.fullText;
 }
 
-// Extract HS codes using AI with tool calling for structured output
-async function extractHSCodesWithAI(content: string, filename: string): Promise<ExtractedHSCode[]> {
+// Extract HS codes from a single page/chunk with retry logic
+async function extractHSCodesFromChunk(
+  content: string, 
+  filename: string, 
+  chunkIndex: number,
+  retryCount: number = 0
+): Promise<ExtractedHSCode[]> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   
   if (!LOVABLE_API_KEY) {
-    console.log("[analyze-file] No LOVABLE_API_KEY, cannot extract HS codes with AI");
     return [];
   }
 
+  const MAX_RETRIES = 2;
+  const MAX_CONTENT = 40000; // Increased chunk size
+  const contentToProcess = content.length > MAX_CONTENT ? content.slice(0, MAX_CONTENT) : content;
+
   try {
-    console.log(`[analyze-file] Extracting HS codes from document: ${filename}`);
-    
-    // Split content into chunks if too large
-    const MAX_CONTENT = 30000;
-    const contentToProcess = content.length > MAX_CONTENT ? content.slice(0, MAX_CONTENT) : content;
+    console.log(`[analyze-file] Extracting HS codes from chunk ${chunkIndex + 1} (retry: ${retryCount})`);
     
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -182,24 +314,34 @@ async function extractHSCodesWithAI(content: string, filename: string): Promise<
             role: "system",
             content: `Tu es un expert en nomenclature douanière marocaine. Extrait TOUS les codes HS de ce document.
 
-FORMAT MAROCAIN - La colonne "Codification" contient 5 sous-colonnes formant un code à 14 chiffres:
-- Colonne 1: 4 chiffres (position HS internationale, ex: 0101)
-- Colonne 2: 2 chiffres (sous-position, ex: 21)
-- Colonne 3: 2 chiffres (extension, ex: 00)
-- Colonne 4: 2 chiffres (extension nationale, ex: 00)
-- Colonne 5: 4 chiffres (extension marocaine, ex: 0000) - OPTIONNEL
+FORMAT MAROCAIN - La colonne "Codification" contient 5 sous-colonnes formant un code jusqu'à 14 chiffres:
+- Position: 4 chiffres (ex: 0101)
+- Sous-position: 2 chiffres (ex: 21)
+- Extension: 2 chiffres (ex: 00)
+- Extension nationale: 2 chiffres (ex: 10)
+- Extension marocaine: 4 chiffres (ex: 0000) - OPTIONNEL
 
-RÈGLES:
-- Extrait le code COMPLET tel qu'il apparaît (jusqu'à 14 chiffres si disponible)
-- Si le code n'a que 10 chiffres, c'est normal (code_14 sera null)
-- Retire les points et espaces pour obtenir le code numérique
-- Pour chaque code, extrait aussi le libellé, l'unité et le taux de droit si disponible
-- Ignore les lignes de titre sans code numérique
-- Si un code commence par "EX", retire le EX mais garde le code`
+RÈGLES CRITIQUES:
+1. Extrait TOUS les codes, même ceux avec tirets "- - -"
+2. Le code COMPLET peut avoir 6, 8, 10 ou 14 chiffres
+3. Retire points/espaces pour le code numérique
+4. "EX" = préfixe d'exception, retire-le
+5. Ignore les lignes SANS code numérique (titres)
+6. Les libellés avec tirets sont des sous-catégories valides
+7. Extrait l'unité: u, kg, l, m, m2, m3, etc.
+8. Extrait le taux de droit (pourcentage)
+9. Les notes (a), (b), (1) sont des restrictions à capturer
+
+VALIDATION:
+- Chapitre (2 premiers chiffres): 01 à 99
+- Sous-position (6 premiers chiffres): doit être logique
+- Si un code semble incorrect, vérifie le contexte
+
+IMPORTANT: Ne rate AUCUN code. Mieux vaut extraire un code douteux que de le manquer.`
           },
           {
             role: "user",
-            content: `Extrait tous les codes HS de ce document tarifaire marocain:\n\n${contentToProcess}`
+            content: `Extrait tous les codes HS de cette section (partie ${chunkIndex + 1}):\n\n${contentToProcess}`
           }
         ],
         tools: [
@@ -218,22 +360,35 @@ RÈGLES:
                       properties: {
                         code_raw: { 
                           type: "string", 
-                          description: "Code tel qu'extrait du document (avec ou sans points/espaces)" 
+                          description: "Code tel qu'extrait (avec ou sans points/espaces)" 
                         },
                         label_fr: { 
                           type: "string", 
-                          description: "Désignation ou libellé du produit en français" 
+                          description: "Désignation du produit en français (inclure les tirets de sous-catégorie)" 
                         },
                         unit: {
                           type: "string",
-                          description: "Unité de mesure (u, kg, l, etc.)"
+                          description: "Unité de mesure (u, kg, l, m, m2, etc.)"
                         },
                         droit: {
                           type: "number",
                           description: "Taux de droit de douane en pourcentage"
+                        },
+                        notes: {
+                          type: "string",
+                          description: "Notes de restriction ou références (a), (b), (1), etc."
                         }
                       },
                       required: ["code_raw", "label_fr"]
+                    }
+                  },
+                  extraction_quality: {
+                    type: "object",
+                    properties: {
+                      total_lines_analyzed: { type: "number" },
+                      codes_found: { type: "number" },
+                      potential_missed: { type: "number" },
+                      notes: { type: "string" }
                     }
                   }
                 },
@@ -243,20 +398,21 @@ RÈGLES:
           }
         ],
         tool_choice: { type: "function", function: { name: "extract_hs_codes" } },
-        max_tokens: 16000,
-        temperature: 0.1,
+        max_tokens: 32000, // Increased
+        temperature: 0.05, // Lower for more consistency
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
       console.error("[analyze-file] Lovable AI error for HS extraction:", response.status, errorText);
-      if (response.status === 429) {
-        console.error("[analyze-file] Rate limit exceeded");
+      
+      if (response.status === 429 && retryCount < MAX_RETRIES) {
+        // Wait and retry on rate limit
+        await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1)));
+        return extractHSCodesFromChunk(content, filename, chunkIndex, retryCount + 1);
       }
-      if (response.status === 402) {
-        console.error("[analyze-file] Payment required");
-      }
+      
       return [];
     }
 
@@ -268,52 +424,76 @@ RÈGLES:
       try {
         const parsed = JSON.parse(toolCall.function.arguments);
         const codes = parsed.codes || [];
+        const quality = parsed.extraction_quality;
         
-        // Validate and normalize codes
-        const validCodes: ExtractedHSCode[] = codes
-          .filter((c: any) => c.code_raw && c.label_fr)
-          .map((c: any) => {
-            // Remove all non-digits
-            const cleanCode = c.code_raw.replace(/\D/g, '');
-            
-            // Determine code_10 and code_14
-            let code_10: string;
-            let code_14: string | undefined;
-            
-            if (cleanCode.length >= 14) {
-              // Full 14-digit Moroccan code
-              code_14 = cleanCode.slice(0, 14);
-              code_10 = cleanCode.slice(0, 10);
-            } else if (cleanCode.length > 10) {
-              // Between 10 and 14 digits - pad to 14
-              code_14 = cleanCode.padEnd(14, '0').slice(0, 14);
-              code_10 = cleanCode.slice(0, 10);
-            } else if (cleanCode.length >= 6) {
-              // Standard code - normalize to 10 digits
-              code_10 = cleanCode.padEnd(10, '0').slice(0, 10);
-              code_14 = undefined;
-            } else {
-              // Too short, skip
-              return null;
-            }
-            
-            return {
-              code_10,
-              code_14,
-              label_fr: c.label_fr.trim(),
-              unit: c.unit?.trim(),
-              droit: typeof c.droit === 'number' ? c.droit : undefined
-            };
-          })
-          .filter((c: any) => {
-            if (!c) return false;
-            // Validate: chapter should be 01-99
-            const chapter = parseInt(c.code_10.slice(0, 2), 10);
-            return c.code_10.length === 10 && chapter >= 1 && chapter <= 99;
-          });
+        if (quality) {
+          console.log(`[analyze-file] Chunk ${chunkIndex + 1} quality: ${quality.codes_found}/${quality.total_lines_analyzed} codes, potential missed: ${quality.potential_missed || 0}`);
+        }
         
-        console.log(`[analyze-file] AI extracted ${validCodes.length} valid HS codes (with code_14 support)`);
-        return validCodes;
+        // Process and validate codes
+        const processedCodes: ExtractedHSCode[] = [];
+        
+        for (const c of codes) {
+          if (!c.code_raw || !c.label_fr) continue;
+          
+          // Clean and normalize code
+          const cleanCode = c.code_raw.replace(/\D/g, '');
+          
+          // Skip if too short
+          if (cleanCode.length < 6) continue;
+          
+          // Determine code_10 and code_14
+          let code_10: string;
+          let code_14: string | undefined;
+          
+          if (cleanCode.length >= 14) {
+            code_14 = cleanCode.slice(0, 14);
+            code_10 = cleanCode.slice(0, 10);
+          } else if (cleanCode.length > 10) {
+            code_14 = cleanCode.padEnd(14, '0').slice(0, 14);
+            code_10 = cleanCode.slice(0, 10);
+          } else if (cleanCode.length >= 6) {
+            code_10 = cleanCode.padEnd(10, '0').slice(0, 10);
+            code_14 = undefined;
+          } else {
+            continue;
+          }
+          
+          const hsCode: ExtractedHSCode = {
+            code_10,
+            code_14,
+            label_fr: c.label_fr.trim(),
+            unit: c.unit?.trim(),
+            droit: typeof c.droit === 'number' ? c.droit : undefined,
+            notes: c.notes?.trim()
+          };
+          
+          // Validate
+          const validation = validateHSCode(hsCode);
+          
+          if (validation.isValid) {
+            processedCodes.push(hsCode);
+          } else {
+            console.log(`[analyze-file] Skipping invalid code ${code_10}: ${validation.errors.join(', ')}`);
+          }
+          
+          if (validation.warnings.length > 0) {
+            console.log(`[analyze-file] Warnings for ${code_10}: ${validation.warnings.join(', ')}`);
+          }
+        }
+        
+        console.log(`[analyze-file] Chunk ${chunkIndex + 1}: ${processedCodes.length} valid codes extracted`);
+        
+        // Retry if few codes found and content seems substantial
+        if (processedCodes.length < 3 && content.length > 1000 && retryCount < MAX_RETRIES) {
+          console.log(`[analyze-file] Few codes found, retrying chunk ${chunkIndex + 1}`);
+          const retryResult = await extractHSCodesFromChunk(content, filename, chunkIndex, retryCount + 1);
+          if (retryResult.length > processedCodes.length) {
+            return retryResult;
+          }
+        }
+        
+        return processedCodes;
       } catch (e) {
         console.error("[analyze-file] Error parsing HS codes response:", e);
         return [];
@@ -321,6 +501,110 @@ RÈGLES:
     }
     
     return [];
+  } catch (e) {
+    console.error("[analyze-file] HS extraction error:", e);
+    return [];
+  }
+}
+
+// Main extraction function with multi-page support
+async function extractHSCodesWithAI(content: string, filename: string): Promise<ExtractedHSCode[]> {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  
+  if (!LOVABLE_API_KEY) {
+    console.log("[analyze-file] No LOVABLE_API_KEY, cannot extract HS codes with AI");
+    return [];
+  }
+
+  try {
+    console.log(`[analyze-file] Starting HS code extraction: ${filename}`);
+    
+    // Split content into chunks for better processing
+    const CHUNK_SIZE = 35000; // Characters per chunk
+    const OVERLAP = 2000; // Overlap between chunks to catch codes at boundaries
+    
+    const chunks: string[] = [];
+    
+    if (content.length <= CHUNK_SIZE) {
+      chunks.push(content);
+    } else {
+      let start = 0;
+      while (start < content.length) {
+        let end = Math.min(start + CHUNK_SIZE, content.length);
+        
+        // Try to find a natural break point
+        if (end < content.length) {
+          const lastNewline = content.lastIndexOf('\n', end);
+          const lastPipe = content.lastIndexOf('|', end);
+          const breakPoint = Math.max(lastNewline, lastPipe);
+          
+          if (breakPoint > start + CHUNK_SIZE / 2) {
+            end = breakPoint + 1;
+          }
+        }
+        
+        chunks.push(content.slice(start, end));
+        start = end - OVERLAP;
+      }
+    }
+    
+    console.log(`[analyze-file] Processing ${chunks.length} chunk(s)`);
+    
+    // Process chunks in parallel with concurrency limit
+    const CONCURRENCY = 3;
+    const allCodes: ExtractedHSCode[] = [];
+    
+    for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+      const batch = chunks.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        batch.map((chunk, idx) => extractHSCodesFromChunk(chunk, filename, i + idx))
+      );
+      
+      for (const codes of results) {
+        allCodes.push(...codes);
+      }
+      
+      // Small delay between batches to avoid rate limits
+      if (i + CONCURRENCY < chunks.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    // Deduplicate by code_10 (prefer entries with code_14 and more metadata)
+    const uniqueCodes = new Map<string, ExtractedHSCode>();
+    
+    for (const code of allCodes) {
+      const existing = uniqueCodes.get(code.code_10);
+      
+      if (!existing) {
+        uniqueCodes.set(code.code_10, code);
+      } else {
+        // Keep the one with more metadata
+        let existingScore = 0;
+        let newScore = 0;
+        
+        if (existing.code_14) existingScore += 2;
+        if (existing.unit) existingScore += 1;
+        if (existing.droit !== undefined) existingScore += 1;
+        if (existing.notes) existingScore += 1;
+        if (existing.label_fr.length > 20) existingScore += 1;
+        
+        if (code.code_14) newScore += 2;
+        if (code.unit) newScore += 1;
+        if (code.droit !== undefined) newScore += 1;
+        if (code.notes) newScore += 1;
+        if (code.label_fr.length > 20) newScore += 1;
+        
+        if (newScore > existingScore) {
+          uniqueCodes.set(code.code_10, code);
+        }
+      }
+    }
+    
+    const finalCodes = Array.from(uniqueCodes.values());
+    console.log(`[analyze-file] Total: ${allCodes.length} codes extracted, ${finalCodes.length} unique after deduplication`);
+    
+    return finalCodes;
   } catch (e) {
     console.error("[analyze-file] HS extraction error:", e);
     return [];
@@ -432,9 +716,10 @@ async function processAndStore(
   content: string,
   filename: string,
   _userId: string
-): Promise<{ success: boolean; recordsCreated: number; error?: string }> {
+): Promise<{ success: boolean; recordsCreated: number; error?: string; validationStats?: any }> {
   const versionLabel = new Date().toISOString().split("T")[0];
   let recordsCreated = 0;
+  let validationStats = { valid: 0, invalid: 0, warnings: 0 };
 
   try {
     // For kb_chunks sources
@@ -465,25 +750,16 @@ async function processAndStore(
       const extractedCodes = await extractHSCodesWithAI(content, filename);
       
       if (extractedCodes.length > 0) {
-        // Deduplicate by code_10 (prefer entries with code_14)
-        const uniqueCodes = new Map<string, ExtractedHSCode>();
-        for (const code of extractedCodes) {
-          const existing = uniqueCodes.get(code.code_10);
-          // Keep the one with code_14, or the first one if neither has it
-          if (!existing || (code.code_14 && !existing.code_14)) {
-            uniqueCodes.set(code.code_10, code);
-          }
-        }
-        
-        const records = Array.from(uniqueCodes.values()).map(code => ({
+        // Build records for insertion
+        const records = extractedCodes.map(code => ({
           code_10: code.code_10,
           code_14: code.code_14 || null,
           code_6: code.code_10.slice(0, 6),
-          // code_4 is a generated column, do not include it
           chapter_2: code.code_10.slice(0, 2),
           label_fr: code.label_fr.slice(0, 500),
           unit: code.unit || null,
-          taxes: code.droit ? { droit_import: code.droit } : null,
+          taxes: code.droit !== undefined ? { droit_import: code.droit } : null,
+          restrictions: code.notes ? [code.notes] : null,
           active: true,
           active_version_label: versionLabel,
         }));
@@ -492,17 +768,21 @@ async function processAndStore(
           .from("hs_codes")
           .upsert(records, { onConflict: "code_10" });
         if (error) throw error;
+        
         recordsCreated = records.length;
-        console.log(`[analyze-file] Extracted and stored ${recordsCreated} HS codes`);
+        validationStats.valid = records.length;
+        
+        console.log(`[analyze-file] Stored ${recordsCreated} HS codes with enhanced extraction`);
       } else {
         // Fallback: try regex patterns for HS codes
-        const hsCodePattern = /\b(\d{6,10})\b/g;
+        const hsCodePattern = /\b(\d{6,14})\b/g;
         const foundCodes = new Set<string>();
         let match;
         
         while ((match = hsCodePattern.exec(content)) !== null) {
-          const code = match[1].padEnd(10, '0');
-          if (code.length === 10 && !code.startsWith('0000')) {
+          const code = match[1].padEnd(10, '0').slice(0, 10);
+          const chapter = parseInt(code.slice(0, 2), 10);
+          if (code.length === 10 && chapter >= 1 && chapter <= 99) {
             foundCodes.add(code);
           }
         }
@@ -511,7 +791,6 @@ async function processAndStore(
           const records = Array.from(foundCodes).map(code => ({
             code_10: code,
             code_6: code.slice(0, 6),
-            // code_4 is a generated column, do not include it
             chapter_2: code.slice(0, 2),
             label_fr: `Code HS extrait de: ${filename}`,
             active: true,
@@ -523,7 +802,7 @@ async function processAndStore(
             .upsert(records, { onConflict: "code_10" });
           if (error) throw error;
           recordsCreated = records.length;
-          console.log(`[analyze-file] Extracted ${recordsCreated} HS codes via regex`);
+          console.log(`[analyze-file] Extracted ${recordsCreated} HS codes via regex fallback`);
         } else {
           // If no structured data, store as kb_chunk
           const chunks = chunkText(content, filename, 1000, 200);
@@ -604,7 +883,7 @@ async function processAndStore(
       console.log("[analyze-file] Embeddings will be generated later");
     }
 
-    return { success: true, recordsCreated };
+    return { success: true, recordsCreated, validationStats };
   } catch (e) {
     console.error("[analyze-file] Storage error:", e);
     return { 
@@ -674,8 +953,9 @@ serve(async (req) => {
       
       if (fileType.includes("pdf") || filename?.toLowerCase().endsWith(".pdf")) {
         console.log(`[analyze-file] Processing PDF: ${filename}`);
-        processedContent = await extractTextFromPDF(base64Data, filename || "document.pdf");
-        console.log(`[analyze-file] PDF extracted, got ${processedContent.length} chars`);
+        const result = await extractTextFromPDFMultiPage(base64Data, filename || "document.pdf");
+        processedContent = result.fullText;
+        console.log(`[analyze-file] PDF extracted with multi-page, got ${processedContent.length} chars from ${result.pages.length} page(s)`);
       } else {
         // For other binary files, try to decode base64 as text
         try {

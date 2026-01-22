@@ -8,6 +8,7 @@ export const createCase = apiClient.createCase;
 export const getCases = apiClient.getCases;
 export const getCaseDetail = apiClient.getCaseDetail;
 export const validateCase = apiClient.validateCase;
+export const deleteCase = apiClient.deleteCase;
 export const presignFile = apiClient.presignFile;
 export const attachFile = apiClient.attachFile;
 export const uploadAndAttachFile = apiClient.uploadAndAttachFile;

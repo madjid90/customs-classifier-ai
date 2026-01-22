@@ -80,6 +80,12 @@ serve(async (req) => {
       return await handleValidateCase(caseId, supabase, user, profile, role, corsHeaders);
     }
 
+    // Route: DELETE /cases/:id - Delete case
+    if (req.method === "DELETE" && pathParts.length === 2 && pathParts[0] === "cases") {
+      const caseId = pathParts[1];
+      return await handleDeleteCase(caseId, supabase, user, profile, corsHeaders);
+    }
+
     // Route not found
     return new Response(
       JSON.stringify({ error: "Route non trouvée" }),
@@ -382,6 +388,100 @@ async function handleValidateCase(
 
   return new Response(
     JSON.stringify({ success: true, message: "Dossier validé avec succès" }),
+    { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+  );
+}
+
+async function handleDeleteCase(
+  caseId: string,
+  supabase: ReturnType<typeof createServiceClient>,
+  user: { id: string },
+  profile: UserProfile,
+  corsHeaders: Record<string, string>
+) {
+  // Get case and verify ownership
+  const { data: caseData, error: caseError } = await supabase
+    .from("cases")
+    .select("*")
+    .eq("id", caseId)
+    .eq("company_id", profile.company_id)
+    .single();
+
+  if (caseError || !caseData) {
+    return new Response(
+      JSON.stringify({ error: "Dossier non trouvé" }),
+      { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  // Only allow deletion by the creator or if the case is not yet validated
+  if (caseData.created_by !== user.id && caseData.status === "VALIDATED") {
+    return new Response(
+      JSON.stringify({ error: "Impossible de supprimer un dossier validé par un autre utilisateur" }),
+      { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  // Delete related records in order (respecting foreign key constraints)
+  // 1. Delete classification feedback
+  await supabase
+    .from("classification_feedback")
+    .delete()
+    .eq("case_id", caseId);
+
+  // 2. Delete classification results
+  await supabase
+    .from("classification_results")
+    .delete()
+    .eq("case_id", caseId);
+
+  // 3. Delete case files (also delete from storage)
+  const { data: files } = await supabase
+    .from("case_files")
+    .select("storage_path")
+    .eq("case_id", caseId);
+
+  if (files && files.length > 0) {
+    const storagePaths = files
+      .map(f => f.storage_path)
+      .filter((p): p is string => !!p);
+    
+    if (storagePaths.length > 0) {
+      await supabase.storage
+        .from("case-files")
+        .remove(storagePaths);
+    }
+  }
+
+  await supabase
+    .from("case_files")
+    .delete()
+    .eq("case_id", caseId);
+
+  // 4. Delete audit logs
+  await supabase
+    .from("audit_logs")
+    .delete()
+    .eq("case_id", caseId);
+
+  // 5. Finally delete the case
+  const { error: deleteError } = await supabase
+    .from("cases")
+    .delete()
+    .eq("id", caseId);
+
+  if (deleteError) {
+    logger.error("Error deleting case:", deleteError);
+    return new Response(
+      JSON.stringify({ error: "Impossible de supprimer le dossier" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  logger.info("Case deleted:", caseId);
+
+  return new Response(
+    JSON.stringify({ success: true, message: "Dossier supprimé avec succès" }),
     { headers: { ...corsHeaders, "Content-Type": "application/json" } }
   );
 }

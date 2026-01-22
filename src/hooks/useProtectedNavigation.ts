@@ -58,8 +58,8 @@ export function useProtectedNavigation(): UseProtectedNavigationReturn {
     }
   }, [isAuthenticated, navigate, storeRedirectPath]);
 
-  const redirectAfterLogin = useCallback((defaultPath: string = "/dashboard") => {
-    // Always redirect to dashboard after login - no stored paths
+  const redirectAfterLogin = useCallback((defaultPath: string = "/cases/new") => {
+    // Always redirect to new case page after login
     clearRedirectPath();
     navigate(defaultPath, { replace: true });
   }, [clearRedirectPath, navigate]);

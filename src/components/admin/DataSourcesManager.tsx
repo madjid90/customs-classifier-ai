@@ -70,6 +70,10 @@ const KB_SOURCE_LABELS: Record<KBSource, string> = {
   maroc: "Douane Maroc",
   lois: "Lois de Finances",
   dum: "Historique DUM",
+  conseil: "Conseils & Guides",
+  reglementation: "Réglementation",
+  guides: "Guides Pratiques",
+  external: "Sources Externes",
 };
 
 const STATUS_LABELS: Record<SourceStatus, string> = {

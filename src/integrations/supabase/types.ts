@@ -947,6 +947,59 @@ export type Database = {
           },
         ]
       }
+      scraped_files: {
+        Row: {
+          chunks_created: number | null
+          content_extracted: boolean | null
+          created_at: string | null
+          file_size_bytes: number | null
+          file_type: string
+          filename: string
+          id: string
+          metadata: Json | null
+          original_url: string
+          processed_at: string | null
+          source_id: string | null
+          storage_path: string
+        }
+        Insert: {
+          chunks_created?: number | null
+          content_extracted?: boolean | null
+          created_at?: string | null
+          file_size_bytes?: number | null
+          file_type: string
+          filename: string
+          id?: string
+          metadata?: Json | null
+          original_url: string
+          processed_at?: string | null
+          source_id?: string | null
+          storage_path: string
+        }
+        Update: {
+          chunks_created?: number | null
+          content_extracted?: boolean | null
+          created_at?: string | null
+          file_size_bytes?: number | null
+          file_type?: string
+          filename?: string
+          id?: string
+          metadata?: Json | null
+          original_url?: string
+          processed_at?: string | null
+          source_id?: string | null
+          storage_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scraped_files_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       security_logs: {
         Row: {
           attempted_path: string
@@ -1203,7 +1256,15 @@ export type Database = {
       evidence_source: "omd" | "maroc" | "lois" | "dum"
       import_export_type: "import" | "export"
       ingestion_log_level: "info" | "warning" | "error"
-      ingestion_source: "omd" | "maroc" | "lois" | "dum"
+      ingestion_source:
+        | "omd"
+        | "maroc"
+        | "lois"
+        | "dum"
+        | "conseil"
+        | "reglementation"
+        | "guides"
+        | "external"
       ingestion_status:
         | "NEW"
         | "EXTRACTING"
@@ -1371,7 +1432,16 @@ export const Constants = {
       evidence_source: ["omd", "maroc", "lois", "dum"],
       import_export_type: ["import", "export"],
       ingestion_log_level: ["info", "warning", "error"],
-      ingestion_source: ["omd", "maroc", "lois", "dum"],
+      ingestion_source: [
+        "omd",
+        "maroc",
+        "lois",
+        "dum",
+        "conseil",
+        "reglementation",
+        "guides",
+        "external",
+      ],
       ingestion_status: [
         "NEW",
         "EXTRACTING",

@@ -5,13 +5,27 @@ const FIRECRAWL_API_KEY = Deno.env.get("FIRECRAWL_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+// File extensions to detect and download
+const DOWNLOADABLE_EXTENSIONS = [
+  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+  ".odt", ".ods", ".odp", ".rtf", ".txt", ".csv"
+];
+
 interface ScrapeRequest {
   source_id: string;
   options?: {
     max_pages?: number;
     include_paths?: string[];
     exclude_paths?: string[];
+    download_files?: boolean;
   };
+}
+
+interface ScrapeResult {
+  pagesScraped: number;
+  chunksCreated: number;
+  filesDownloaded: number;
+  errors: string[];
 }
 
 Deno.serve(async (req) => {
@@ -56,7 +70,7 @@ Deno.serve(async (req) => {
     console.log(`[scrape-source] Starting scrape for: ${source.name} (${source.url})`);
 
     // Create scrape log entry
-    const { data: scrapeLog, error: logError } = await supabase
+    const { data: scrapeLog } = await supabase
       .from("scrape_logs")
       .insert({
         source_id: source.id,
@@ -66,146 +80,24 @@ Deno.serve(async (req) => {
       .select()
       .single();
 
-    if (logError) {
-      console.error("Error creating scrape log:", logError);
-    }
-
-    let pagesScraped = 0;
-    let chunksCreated = 0;
-    let errors: string[] = [];
+    const result: ScrapeResult = {
+      pagesScraped: 0,
+      chunksCreated: 0,
+      filesDownloaded: 0,
+      errors: [],
+    };
 
     try {
       // Determine scrape method based on source type
-      if (source.source_type === "sitemap") {
+      if (source.source_type === "pdf_url") {
+        // Direct PDF download and processing
+        await downloadAndProcessFile(supabase, source.url, source, result);
+      } else if (source.source_type === "sitemap") {
         // Use Firecrawl map to get all URLs first
-        const mapResponse = await fetch("https://api.firecrawl.dev/v1/map", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            url: source.url,
-            limit: options.max_pages || 100,
-            includeSubdomains: false,
-          }),
-        });
-
-        const mapData = await mapResponse.json();
-        
-        if (mapData.success && mapData.links) {
-          console.log(`[scrape-source] Found ${mapData.links.length} URLs to scrape`);
-          
-          // Scrape each URL
-          for (const pageUrl of mapData.links.slice(0, options.max_pages || 50)) {
-            try {
-              const result = await scrapeAndStore(
-                supabase,
-                pageUrl,
-                source,
-                FIRECRAWL_API_KEY
-              );
-              if (result.success) {
-                pagesScraped++;
-                chunksCreated += result.chunks;
-              }
-            } catch (err) {
-              const errorMsg = err instanceof Error ? err.message : String(err);
-              errors.push(`${pageUrl}: ${errorMsg}`);
-            }
-          }
-        }
-      } else if (source.source_type === "website") {
-        // Use Firecrawl crawl for recursive scraping
-        const crawlResponse = await fetch("https://api.firecrawl.dev/v1/crawl", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            url: source.url,
-            limit: options.max_pages || 25,
-            maxDepth: 3,
-            includePaths: options.include_paths,
-            excludePaths: options.exclude_paths || [
-              "/login", "/signup", "/admin", "/cart", "/account"
-            ],
-            scrapeOptions: {
-              formats: ["markdown"],
-              onlyMainContent: true,
-            },
-          }),
-        });
-
-        const crawlData = await crawlResponse.json();
-        
-        if (crawlData.success && crawlData.data) {
-          console.log(`[scrape-source] Crawled ${crawlData.data.length} pages`);
-          
-          for (const page of crawlData.data) {
-            try {
-              const chunks = await storePageChunks(
-                supabase,
-                page,
-                source
-              );
-              pagesScraped++;
-              chunksCreated += chunks;
-            } catch (err) {
-              const errorMsg = err instanceof Error ? err.message : String(err);
-              errors.push(`Page: ${errorMsg}`);
-            }
-          }
-        } else if (crawlData.id) {
-          // Async crawl - wait for completion
-          console.log(`[scrape-source] Crawl started with ID: ${crawlData.id}`);
-          
-          // Poll for results
-          let attempts = 0;
-          while (attempts < 30) {
-            await new Promise(r => setTimeout(r, 2000));
-            
-            const statusResponse = await fetch(
-              `https://api.firecrawl.dev/v1/crawl/${crawlData.id}`,
-              {
-                headers: { "Authorization": `Bearer ${FIRECRAWL_API_KEY}` },
-              }
-            );
-            
-            const statusData = await statusResponse.json();
-            
-            if (statusData.status === "completed") {
-              for (const page of statusData.data || []) {
-                try {
-                  const chunks = await storePageChunks(supabase, page, source);
-                  pagesScraped++;
-                  chunksCreated += chunks;
-                } catch (err) {
-                  const errorMsg = err instanceof Error ? err.message : String(err);
-                  errors.push(`Page: ${errorMsg}`);
-                }
-              }
-              break;
-            } else if (statusData.status === "failed") {
-              throw new Error("Crawl failed");
-            }
-            
-            attempts++;
-          }
-        }
+        await scrapeWithMap(supabase, source, options, result);
       } else {
-        // Single page scrape for pdf_url, rss, api
-        const result = await scrapeAndStore(
-          supabase,
-          source.url,
-          source,
-          FIRECRAWL_API_KEY
-        );
-        if (result.success) {
-          pagesScraped = 1;
-          chunksCreated = result.chunks;
-        }
+        // Website crawl with file detection
+        await scrapeWithCrawl(supabase, source, options, result);
       }
 
       // Update source stats
@@ -213,12 +105,13 @@ Deno.serve(async (req) => {
         .from("data_sources")
         .update({
           last_scrape_at: new Date().toISOString(),
-          status: errors.length > 0 && pagesScraped === 0 ? "error" : "active",
-          error_message: errors.length > 0 ? errors.slice(0, 3).join("; ") : null,
-          error_count: errors.length,
+          status: result.errors.length > 0 && result.pagesScraped === 0 ? "error" : "active",
+          error_message: result.errors.length > 0 ? result.errors.slice(0, 3).join("; ") : null,
+          error_count: result.errors.length,
           stats: {
-            pages_scraped: pagesScraped,
-            chunks_created: chunksCreated,
+            pages_scraped: result.pagesScraped,
+            chunks_created: result.chunksCreated,
+            files_downloaded: result.filesDownloaded,
             last_run: new Date().toISOString(),
           },
         })
@@ -231,22 +124,24 @@ Deno.serve(async (req) => {
           .update({
             status: "completed",
             completed_at: new Date().toISOString(),
-            pages_scraped: pagesScraped,
-            chunks_created: chunksCreated,
-            errors_count: errors.length,
-            error_message: errors.length > 0 ? errors.slice(0, 5).join("\n") : null,
+            pages_scraped: result.pagesScraped,
+            chunks_created: result.chunksCreated,
+            errors_count: result.errors.length,
+            error_message: result.errors.length > 0 ? result.errors.slice(0, 5).join("\n") : null,
+            details: { files_downloaded: result.filesDownloaded },
           })
           .eq("id", scrapeLog.id);
       }
 
-      console.log(`[scrape-source] Completed: ${pagesScraped} pages, ${chunksCreated} chunks`);
+      console.log(`[scrape-source] Completed: ${result.pagesScraped} pages, ${result.chunksCreated} chunks, ${result.filesDownloaded} files`);
 
       return new Response(
         JSON.stringify({
           success: true,
-          pages_scraped: pagesScraped,
-          chunks_created: chunksCreated,
-          errors: errors.length,
+          pages_scraped: result.pagesScraped,
+          chunks_created: result.chunksCreated,
+          files_downloaded: result.filesDownloaded,
+          errors: result.errors.length,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -254,7 +149,6 @@ Deno.serve(async (req) => {
       console.error("[scrape-source] Scrape error:", err);
       const errorMsg = err instanceof Error ? err.message : String(err);
       
-      // Update source with error
       await supabase
         .from("data_sources")
         .update({
@@ -264,7 +158,6 @@ Deno.serve(async (req) => {
         })
         .eq("id", source.id);
 
-      // Update scrape log
       if (scrapeLog) {
         await supabase
           .from("scrape_logs")
@@ -288,21 +181,311 @@ Deno.serve(async (req) => {
   }
 });
 
-async function scrapeAndStore(
+// Scrape using sitemap/map
+async function scrapeWithMap(
+  supabase: any,
+  source: any,
+  options: any,
+  result: ScrapeResult
+) {
+  const mapResponse = await fetch("https://api.firecrawl.dev/v1/map", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      url: source.url,
+      limit: options.max_pages || 100,
+      includeSubdomains: false,
+    }),
+  });
+
+  const mapData = await mapResponse.json();
+  
+  if (mapData.success && mapData.links) {
+    console.log(`[scrape-source] Found ${mapData.links.length} URLs`);
+    
+    const fileUrls: string[] = [];
+    const pageUrls: string[] = [];
+    
+    // Separate files from pages
+    for (const url of mapData.links) {
+      if (isDownloadableFile(url)) {
+        fileUrls.push(url);
+      } else {
+        pageUrls.push(url);
+      }
+    }
+    
+    console.log(`[scrape-source] ${pageUrls.length} pages, ${fileUrls.length} files detected`);
+    
+    // Process pages
+    for (const pageUrl of pageUrls.slice(0, options.max_pages || 50)) {
+      try {
+        const chunks = await scrapeAndStorePage(supabase, pageUrl, source);
+        result.pagesScraped++;
+        result.chunksCreated += chunks;
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        result.errors.push(`${pageUrl}: ${errorMsg}`);
+      }
+    }
+    
+    // Download and process files
+    if (options.download_files !== false) {
+      for (const fileUrl of fileUrls.slice(0, 20)) {
+        try {
+          await downloadAndProcessFile(supabase, fileUrl, source, result);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          result.errors.push(`File ${fileUrl}: ${errorMsg}`);
+        }
+      }
+    }
+  }
+}
+
+// Scrape using crawl with file detection
+async function scrapeWithCrawl(
+  supabase: any,
+  source: any,
+  options: any,
+  result: ScrapeResult
+) {
+  const crawlResponse = await fetch("https://api.firecrawl.dev/v1/crawl", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      url: source.url,
+      limit: options.max_pages || 25,
+      maxDepth: 3,
+      includePaths: options.include_paths,
+      excludePaths: options.exclude_paths || [
+        "/login", "/signup", "/admin", "/cart", "/account"
+      ],
+      scrapeOptions: {
+        formats: ["markdown", "links"],
+        onlyMainContent: true,
+      },
+    }),
+  });
+
+  const crawlData = await crawlResponse.json();
+  
+  // Handle async crawl
+  let pages = crawlData.data || [];
+  if (crawlData.id && !crawlData.data) {
+    console.log(`[scrape-source] Async crawl started: ${crawlData.id}`);
+    pages = await waitForCrawlCompletion(crawlData.id);
+  }
+  
+  console.log(`[scrape-source] Processing ${pages.length} pages`);
+  
+  const detectedFiles: string[] = [];
+  
+  for (const page of pages) {
+    try {
+      // Store page content
+      const chunks = await storePageChunks(supabase, page, source);
+      result.pagesScraped++;
+      result.chunksCreated += chunks;
+      
+      // Detect file links in the page
+      const links = page.links || [];
+      for (const link of links) {
+        if (isDownloadableFile(link) && !detectedFiles.includes(link)) {
+          detectedFiles.push(link);
+        }
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      result.errors.push(`Page: ${errorMsg}`);
+    }
+  }
+  
+  // Download detected files
+  if (options.download_files !== false && detectedFiles.length > 0) {
+    console.log(`[scrape-source] Downloading ${detectedFiles.length} files`);
+    
+    for (const fileUrl of detectedFiles.slice(0, 20)) {
+      try {
+        await downloadAndProcessFile(supabase, fileUrl, source, result);
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        result.errors.push(`File ${fileUrl}: ${errorMsg}`);
+      }
+    }
+  }
+}
+
+// Wait for async crawl to complete
+async function waitForCrawlCompletion(crawlId: string): Promise<any[]> {
+  let attempts = 0;
+  while (attempts < 60) {
+    await new Promise(r => setTimeout(r, 2000));
+    
+    const statusResponse = await fetch(
+      `https://api.firecrawl.dev/v1/crawl/${crawlId}`,
+      { headers: { "Authorization": `Bearer ${FIRECRAWL_API_KEY}` } }
+    );
+    
+    const statusData = await statusResponse.json();
+    
+    if (statusData.status === "completed") {
+      return statusData.data || [];
+    } else if (statusData.status === "failed") {
+      throw new Error("Crawl failed");
+    }
+    
+    attempts++;
+  }
+  
+  throw new Error("Crawl timeout");
+}
+
+// Check if URL is a downloadable file
+function isDownloadableFile(url: string): boolean {
+  const lowerUrl = url.toLowerCase();
+  return DOWNLOADABLE_EXTENSIONS.some(ext => lowerUrl.endsWith(ext));
+}
+
+// Get file extension from URL
+function getFileExtension(url: string): string {
+  const match = url.toLowerCase().match(/\.([a-z0-9]+)(?:\?|$)/);
+  return match ? match[1] : "bin";
+}
+
+// Download file and process it
+async function downloadAndProcessFile(
+  supabase: any,
+  fileUrl: string,
+  source: any,
+  result: ScrapeResult
+) {
+  console.log(`[scrape-source] Downloading: ${fileUrl}`);
+  
+  // Download file
+  const response = await fetch(fileUrl);
+  if (!response.ok) {
+    throw new Error(`Download failed: ${response.status}`);
+  }
+  
+  const contentType = response.headers.get("content-type") || "";
+  const arrayBuffer = await response.arrayBuffer();
+  const fileBytes = new Uint8Array(arrayBuffer);
+  
+  // Generate filename
+  const urlPath = new URL(fileUrl).pathname;
+  const originalFilename = urlPath.split("/").pop() || "document";
+  const extension = getFileExtension(fileUrl);
+  const timestamp = Date.now();
+  const storagePath = `${source.id}/${timestamp}-${originalFilename}`;
+  
+  // Upload to storage
+  const { error: uploadError } = await supabase.storage
+    .from("scraped-files")
+    .upload(storagePath, fileBytes, {
+      contentType: contentType || `application/${extension}`,
+      upsert: true,
+    });
+  
+  if (uploadError) {
+    throw new Error(`Upload failed: ${uploadError.message}`);
+  }
+  
+  // Record in scraped_files table
+  await supabase.from("scraped_files").insert({
+    source_id: source.id,
+    original_url: fileUrl,
+    storage_path: storagePath,
+    filename: originalFilename,
+    file_type: extension,
+    file_size_bytes: fileBytes.length,
+    content_extracted: false,
+    metadata: {
+      content_type: contentType,
+      downloaded_at: new Date().toISOString(),
+    },
+  });
+  
+  result.filesDownloaded++;
+  
+  // For PDFs, try to extract text using Firecrawl
+  if (extension === "pdf") {
+    try {
+      const scrapeResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: fileUrl,
+          formats: ["markdown"],
+        }),
+      });
+      
+      const scrapeData = await scrapeResponse.json();
+      const markdown = scrapeData.data?.markdown || scrapeData.markdown;
+      
+      if (markdown && markdown.trim().length > 100) {
+        const chunks = splitIntoChunks(markdown, 1500);
+        
+        for (let i = 0; i < chunks.length; i++) {
+          await supabase.from("kb_chunks").insert({
+            source: source.kb_source,
+            doc_id: `file-${storagePath.replace(/[^a-zA-Z0-9]/g, "_")}`,
+            ref: `${originalFilename} (p${i + 1})`,
+            text: chunks[i],
+            version_label: source.version_label,
+            source_url: fileUrl,
+            page_number: i + 1,
+            metadata: {
+              file_type: extension,
+              storage_path: storagePath,
+              source_name: source.name,
+              source_id: source.id,
+            },
+          });
+        }
+        
+        result.chunksCreated += chunks.length;
+        
+        // Mark as extracted
+        await supabase
+          .from("scraped_files")
+          .update({ 
+            content_extracted: true, 
+            chunks_created: chunks.length,
+            processed_at: new Date().toISOString(),
+          })
+          .eq("storage_path", storagePath);
+      }
+    } catch (err) {
+      console.log(`[scrape-source] PDF extraction failed for ${fileUrl}:`, err);
+    }
+  }
+}
+
+// Scrape a single page
+async function scrapeAndStorePage(
   supabase: any,
   url: string,
-  source: any,
-  apiKey: string
-): Promise<{ success: boolean; chunks: number }> {
+  source: any
+): Promise<number> {
   const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
+      "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
       url,
-      formats: ["markdown"],
+      formats: ["markdown", "links"],
       onlyMainContent: true,
     }),
   });
@@ -317,20 +500,17 @@ async function scrapeAndStore(
   const metadata = data.data?.metadata || data.metadata || {};
 
   if (!markdown || markdown.trim().length < 100) {
-    return { success: true, chunks: 0 };
+    return 0;
   }
 
-  // Split into chunks
   const chunks = splitIntoChunks(markdown, 1500);
   
-  // Store chunks
   for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
     await supabase.from("kb_chunks").insert({
       source: source.kb_source,
       doc_id: `${source.id}-${url.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 50)}`,
       ref: metadata.title || url,
-      text: chunk,
+      text: chunks[i],
       version_label: source.version_label,
       source_url: url,
       page_number: i + 1,
@@ -344,9 +524,10 @@ async function scrapeAndStore(
     });
   }
 
-  return { success: true, chunks: chunks.length };
+  return chunks.length;
 }
 
+// Store chunks from a crawled page
 async function storePageChunks(
   supabase: any,
   page: any,
@@ -384,6 +565,7 @@ async function storePageChunks(
   return chunks.length;
 }
 
+// Split text into chunks
 function splitIntoChunks(text: string, maxLength: number): string[] {
   const chunks: string[] = [];
   const paragraphs = text.split(/\n\n+/);

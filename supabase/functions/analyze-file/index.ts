@@ -897,7 +897,17 @@ serve(async (req) => {
           });
         }
         const buffer = await response.arrayBuffer();
-        pdfBase64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+        const bytes = new Uint8Array(buffer);
+        
+        // Convert to base64 in chunks to avoid stack overflow
+        let binary = '';
+        const chunkSize = 32768; // 32KB chunks
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+          binary += String.fromCharCode.apply(null, Array.from(chunk));
+        }
+        pdfBase64 = btoa(binary);
+        console.log(`[test-ocr] PDF fetched: ${bytes.length} bytes -> ${pdfBase64.length} base64 chars`);
       }
       
       console.log(`[test-ocr] Processing PDF (${pdfBase64.length} base64 chars)`);

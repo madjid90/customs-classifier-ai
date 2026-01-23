@@ -82,61 +82,65 @@ const CONFIG = {
 
 const MOROCCAN_TARIFF_PAGE_PROMPT = `Tu es un expert OCR spécialisé dans les tarifs douaniers marocains.
 
-CETTE PAGE fait partie d'un tarif douanier marocain. Extrait TOUT le contenu de cette page.
+CETTE PAGE fait partie du TARIF DES DROITS DE DOUANE À L'IMPORTATION du Maroc.
 
-STRUCTURE DU TABLEAU (5 colonnes de codification):
-1. Position (4 chiffres): ex 0101
-2. Sous-position (2 chiffres): ex 21
-3. Extension (2 chiffres): ex 00  
-4. Extension nationale (2 chiffres): ex 10
-5. Extension marocaine (4 chiffres): ex 0000 - OPTIONNEL
+FORMAT DU TABLEAU:
+- CODIFICATION: Code complet en une colonne (ex: "0303.14 00 00" = 10 chiffres séparés par espaces/points)
+  Structure: [Position 4 chiffres].[Sous-position 2 chiffres] [Extension 2 chiffres] [Extension nationale 2 chiffres]
+- DESIGNATION DES PRODUITS: Libellé en français
+- DROITS: Taux de droit (nombre, ex: 10 = 10%)
+- UNITE: u, kg, l, m, m2, etc.
 
-COLONNES ADDITIONNELLES:
-- DESIGNATION DES PRODUITS (libellé français)
-- UNITE (u, kg, l, m, m2, etc.)
-- DROITS D'IMPORTATION (pourcentage)
+VARIATIONS DE FORMAT OBSERVÉES:
+1. Tableau standard: Codification | Désignation | Droit | Unité
+2. Tableau avec tirets: Les "–" indiquent des sous-catégories hiérarchiques
+3. Codes partiels dans texte: "0302.74 00" en début de ligne avec sous-codes indentés
 
 RÈGLES CRITIQUES:
-1. CHAQUE LIGNE avec un code numérique = une entrée
-2. Les tirets "- - -" indiquent des sous-catégories (GARDER)
-3. "EX" = exception, retire le préfixe mais garde le code
-4. Les notes (a), (b), (1) sont des restrictions
-5. Ne rate AUCUN code - mieux vaut extraire trop que pas assez
-6. Si un code est partiellement visible, extrait ce qui est lisible
+1. Le code complet peut être sur UNE SEULE COLONNE (ex: "0303.14 00 00")
+2. Reconstituer code_10: retirer tous les séparateurs (points, espaces)
+3. Les tirets "– – –" au début du libellé = sous-catégorie, GARDER le libellé complet
+4. "EX" = exception tarifaire
+5. Si le droit est "-", c'est une exemption (0%)
+6. Notes (a), (b), (1) = restrictions à capturer
 
-FORMAT DE SORTIE - Transcris ligne par ligne:
-CODE | DESIGNATION | UNITE | DROIT
+FORMAT DE SORTIE - Une entrée par ligne:
+CODIFICATION_BRUTE | DESIGNATION | DROIT | UNITE
 
-Exemple:
-0101.21.00.00 | Chevaux reproducteurs de race pure | u | 2,5
-0101.21.00.10 | - - Chevaux arabes | u | 0
+Exemples:
+0303.14 00 00 | – – Truites (Salmo trutta...) | 10 | kg
+0302.74 00 | – – Anguilles (Anguilla spp.) | - | -
+10 | – – – civelles | 10 | kg
 
 COMMENCE L'EXTRACTION DE CETTE PAGE:`;
 
 const HS_EXTRACTION_SYSTEM_PROMPT = `Tu es un expert en nomenclature douanière marocaine. Extrait TOUS les codes HS de ce contenu.
 
-FORMAT MAROCAIN - Codification jusqu'à 14 chiffres:
-- Position: 4 chiffres (ex: 0101)
-- Sous-position: 2 chiffres (ex: 21)
+FORMAT MAROCAIN - Codification consolidée:
+Le code est souvent en UNE SEULE COLONNE: "0303.14 00 00"
+- Position: 4 premiers chiffres (ex: 0303)
+- Sous-position: 2 chiffres suivants (ex: 14)
 - Extension: 2 chiffres (ex: 00)
-- Extension nationale: 2 chiffres (ex: 10)
-- Extension marocaine: 4 chiffres (ex: 0000) - OPTIONNEL
+- Extension nationale: 2 chiffres (ex: 00)
+- code_10 = Position + Sous-position + Extension + Extension nationale = 10 chiffres
+
+RECONSTRUCTION DU CODE:
+"0303.14 00 00" → code_10 = "0303140000"
+"0302.74 00" → code_10 = "0302740000" (compléter avec 00)
+"15 00" (sous un code parent 0301.91) → code_10 = "0301911500"
 
 RÈGLES ABSOLUES:
-1. Extrait TOUS les codes, même avec tirets "- - -"
-2. Code COMPLET: 6, 8, 10 ou 14 chiffres
-3. Retire points/espaces du code numérique
-4. "EX" = préfixe exception, à retirer
-5. Ignore lignes SANS code (titres de section)
-6. Extrait unité: u, kg, l, m, m2, m3, etc.
-7. Extrait taux de droit (pourcentage)
-8. Notes (a), (b), (1) = restrictions à capturer
+1. Code en UNE colonne avec points/espaces à retirer
+2. Sous-codes héritent du préfixe du code parent
+3. "-" comme droit = exemption (0%)
+4. Les tirets "– – –" font partie du libellé, les garder
+5. Unités valides: u, kg, l, m, m2, m3, t, g, pair/paire, 1000u
 
 VALIDATION:
-- Chapitre (2 premiers chiffres): 01 à 99 seulement
-- Si code semble incorrect, vérifie le contexte
+- Chapitre (2 premiers chiffres): 01 à 99
+- Un code_10 valide a EXACTEMENT 10 chiffres
 
-IMPORTANT: Extraire TOUS les codes visibles, même douteux.`;
+IMPORTANT: Extraire TOUS les codes, même partiels. Reconstruire le code complet depuis le contexte.`;
 
 // ============================================================================
 // VALIDATION FUNCTIONS
@@ -283,7 +287,8 @@ async function extractTextFromSinglePage(
               {
                 type: "image_url",
                 image_url: {
-                  url: `data:application/pdf;base64,${base64Content}`
+                  url: `data:image/png;base64,${base64Content}`,
+                  detail: "high"
                 }
               }
             ]
@@ -373,7 +378,7 @@ async function extractHSCodesFromText(
             type: "function",
             function: {
               name: "extract_hs_codes",
-              description: "Extrait les codes HS marocains et leurs métadonnées",
+              description: "Extrait les codes HS marocains et leurs métadonnées depuis le tarif douanier",
               parameters: {
                 type: "object",
                 properties: {
@@ -384,11 +389,15 @@ async function extractHSCodesFromText(
                       properties: {
                         code_raw: { 
                           type: "string", 
-                          description: "Code tel qu'extrait (avec ou sans points/espaces)" 
+                          description: "Code brut tel qu'il apparaît (ex: '0303.14 00 00', '15 00', '10')" 
+                        },
+                        code_10_reconstructed: {
+                          type: "string",
+                          description: "Code 10 chiffres reconstitué si le code_raw est partiel (hérite du code parent). Ex: si parent est 0301.91 et code_raw est '15 00', alors code_10 = '0301911500'"
                         },
                         label_fr: { 
                           type: "string", 
-                          description: "Désignation du produit en français" 
+                          description: "Désignation du produit en français (garder les tirets – – au début)" 
                         },
                         unit: {
                           type: "string",
@@ -396,11 +405,19 @@ async function extractHSCodesFromText(
                         },
                         droit: {
                           type: "number",
-                          description: "Taux de droit de douane en pourcentage"
+                          description: "Taux de droit (nombre). Si '-' alors mettre 0"
                         },
                         notes: {
                           type: "string",
-                          description: "Notes de restriction"
+                          description: "Notes de restriction (a), (b), etc."
+                        },
+                        is_subcode: {
+                          type: "boolean",
+                          description: "True si c'est un sous-code d'un code parent (code_raw court comme '15 00')"
+                        },
+                        parent_code: {
+                          type: "string",
+                          description: "Code parent si is_subcode=true (ex: '0301.91')"
                         },
                         confidence: {
                           type: "number",
@@ -415,7 +432,7 @@ async function extractHSCodesFromText(
                     properties: {
                       readability: { type: "number", description: "Lisibilité 0-1" },
                       codes_found: { type: "number" },
-                      potential_missed: { type: "number" }
+                      has_partial_codes: { type: "boolean", description: "True si la page contient des codes partiels qui héritent d'un parent" }
                     }
                   }
                 },
@@ -454,8 +471,26 @@ async function extractHSCodesFromText(
     for (const c of codes) {
       if (!c.code_raw || !c.label_fr) continue;
       
-      const cleanCode = c.code_raw.replace(/\D/g, '');
-      if (cleanCode.length < 6) continue;
+      // Priority: use code_10_reconstructed if available (for partial codes)
+      let codeToProcess = c.code_10_reconstructed || c.code_raw;
+      
+      // Clean the code - remove all non-digits
+      let cleanCode = codeToProcess.replace(/\D/g, '');
+      
+      // Handle partial codes with parent context
+      if (cleanCode.length < 6 && c.parent_code) {
+        const parentClean = c.parent_code.replace(/\D/g, '');
+        // Combine parent prefix with partial code
+        if (parentClean.length >= 4) {
+          cleanCode = parentClean + cleanCode;
+        }
+      }
+      
+      // Skip if still too short
+      if (cleanCode.length < 6) {
+        console.log(`[pdf-ocr] Skipping short code: ${c.code_raw} -> ${cleanCode}`);
+        continue;
+      }
       
       let code_10: string;
       let code_14: string | undefined;
@@ -471,24 +506,33 @@ async function extractHSCodesFromText(
         code_14 = undefined;
       }
       
+      // Handle "-" as duty rate (exemption = 0)
+      let droit = c.droit;
+      if (droit === null || droit === undefined) {
+        droit = undefined;
+      }
+      
       const hsCode: ExtractedHSCode = {
         code_10,
         code_14,
         label_fr: c.label_fr.trim(),
         unit: c.unit?.trim(),
-        droit: typeof c.droit === 'number' ? c.droit : undefined,
+        droit: typeof droit === 'number' ? droit : undefined,
         notes: c.notes?.trim(),
         page_number: pageNumber,
-        extraction_confidence: c.confidence || 0.8,
+        extraction_confidence: c.confidence || (c.is_subcode ? 0.7 : 0.85),
       };
       
       const validation = validateHSCode(hsCode);
       
       if (validation.isValid) {
         processedCodes.push(hsCode);
+      } else {
+        console.log(`[pdf-ocr] Invalid code ${code_10}: ${validation.errors.join(', ')}`);
       }
     }
     
+    console.log(`[pdf-ocr] Page ${pageNumber}: extracted ${processedCodes.length} valid codes from ${codes.length} raw`);
     return processedCodes;
   } catch (error) {
     console.error(`[pdf-ocr] HS extraction error page ${pageNumber}:`, error);

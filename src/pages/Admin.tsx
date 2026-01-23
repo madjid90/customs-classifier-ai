@@ -7,6 +7,7 @@ import { SmartFileUpload } from "@/components/admin/SmartFileUpload";
 import { ImportHistory } from "@/components/admin/ImportHistory";
 import { UserManagement } from "@/components/admin/UserManagement";
 import { DataSourcesManager } from "@/components/admin/DataSourcesManager";
+import { PipelineTest } from "@/components/admin/PipelineTest";
 import { useBackgroundTaskNotifications } from "@/hooks/useBackgroundTaskNotifications";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -19,6 +20,7 @@ import {
   FileText,
   TrendingUp,
   Globe,
+  FlaskConical,
 } from "lucide-react";
 
 interface DashboardStats {
@@ -116,6 +118,10 @@ export default function AdminPage() {
               <TabsTrigger value="sources" className="flex items-center gap-2">
                 <Globe className="h-4 w-4" />
                 Sources Web
+              </TabsTrigger>
+              <TabsTrigger value="pipeline" className="flex items-center gap-2">
+                <FlaskConical className="h-4 w-4" />
+                Test Pipeline
               </TabsTrigger>
             </TabsList>
 
@@ -274,6 +280,11 @@ export default function AdminPage() {
             {/* Data Sources Tab */}
             <TabsContent value="sources">
               <DataSourcesManager />
+            </TabsContent>
+
+            {/* Pipeline Test Tab */}
+            <TabsContent value="pipeline">
+              <PipelineTest />
             </TabsContent>
 
           </Tabs>

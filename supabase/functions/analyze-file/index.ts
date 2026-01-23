@@ -6,9 +6,11 @@ import {
   extractTextFromPDF,
   validateHSCode,
   deduplicateHSCodes,
+  processPageImagesWithVisionOCR,
   type ExtractedHSCode,
   type PDFExtractionResult,
   type HSCodeValidation,
+  type PageImageInput,
 } from "../_shared/pdf-ocr.ts";
 
 // ============================================================================
@@ -842,13 +844,30 @@ serve(async (req) => {
     
     const supabase = createServiceClient();
 
-    let { action, content, filename, targetDatabase } = body;
+    let { action, content, filename, targetDatabase, pageImages, useVisionOCR } = body;
 
     // Check if content is base64-encoded PDF
     let processedContent = content || "";
     let pdfExtractionResult: PDFExtractionResult | null = null;
     
-    if (processedContent.startsWith("[BASE64_FILE:")) {
+    // NEW: Handle page images for vision OCR (from client-side PDF conversion)
+    if (useVisionOCR && pageImages && Array.isArray(pageImages) && pageImages.length > 0) {
+      console.log(`[analyze-file] Processing ${pageImages.length} page images with vision OCR: ${filename}`);
+      
+      const pageInputs: PageImageInput[] = pageImages.map((p: any) => ({
+        pageNumber: p.pageNumber,
+        base64: p.base64,
+        width: p.width,
+        height: p.height,
+      }));
+      
+      pdfExtractionResult = await processPageImagesWithVisionOCR(pageInputs, filename || "document.pdf");
+      processedContent = pdfExtractionResult.full_text;
+      
+      console.log(`[analyze-file] Vision OCR complete: ${pdfExtractionResult.unique_hs_codes.length} HS codes, ${processedContent.length} chars`);
+    }
+    // Existing base64 PDF processing
+    else if (processedContent.startsWith("[BASE64_FILE:")) {
       const typeMatch = processedContent.match(/\[BASE64_FILE:([^\]]+)\]/);
       const fileType = typeMatch?.[1] || "";
       const base64Data = processedContent.replace(/\[BASE64_FILE:[^\]]+\]/, "");

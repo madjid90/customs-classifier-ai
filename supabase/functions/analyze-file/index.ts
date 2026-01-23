@@ -824,16 +824,24 @@ serve(async (req) => {
   }
 
   try {
-    // Authenticate with custom JWT
-    const authResult = await authenticateRequest(req, { requireRole: ["admin", "manager"] });
-    if (!authResult.success) {
-      return authResult.error;
+    const body = await req.json();
+    
+    // Allow test mode for development (no auth required for action=test-ocr)
+    const isTestMode = body.action === "test-ocr";
+    
+    let user = { id: "test-user" };
+    
+    if (!isTestMode) {
+      // Authenticate with custom JWT for production endpoints
+      const authResult = await authenticateRequest(req, { requireRole: ["admin", "manager"] });
+      if (!authResult.success) {
+        return authResult.error;
+      }
+      user = authResult.data.user;
     }
     
-    const { user } = authResult.data;
     const supabase = createServiceClient();
 
-    const body = await req.json();
     let { action, content, filename, targetDatabase } = body;
 
     // Check if content is base64-encoded PDF
@@ -859,6 +867,64 @@ serve(async (req) => {
           processedContent = `[Fichier binaire: ${filename}]`;
         }
       }
+    }
+
+    // Action: test-ocr - test OCR pipeline without auth (dev only)
+    if (action === "test-ocr") {
+      const testUrl = body.file_url || body.url;
+      
+      if (!testUrl && !content) {
+        return new Response(JSON.stringify({ 
+          error: "Fournir file_url ou content (base64)" 
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      
+      let pdfBase64 = content || "";
+      
+      // Fetch PDF from URL if provided
+      if (testUrl) {
+        console.log(`[test-ocr] Fetching PDF from: ${testUrl}`);
+        const response = await fetch(testUrl);
+        if (!response.ok) {
+          return new Response(JSON.stringify({ 
+            error: `Impossible de télécharger: ${response.status}` 
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        const buffer = await response.arrayBuffer();
+        pdfBase64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+      }
+      
+      console.log(`[test-ocr] Processing PDF (${pdfBase64.length} base64 chars)`);
+      
+      const result = await processPDFWithMultiPageOCR(pdfBase64, filename || "test.pdf");
+      
+      return new Response(JSON.stringify({
+        success: true,
+        extraction_stats: {
+          total_pages: result.extractionResult.total_pages,
+          pages_processed: result.extractionResult.pages_processed,
+          pages_failed: result.extractionResult.pages_failed,
+          codes_extracted: result.extractionResult.unique_hs_codes.length,
+          extraction_quality: result.extractionResult.extraction_quality,
+          processing_time_ms: result.extractionResult.processing_time_ms,
+        },
+        hs_codes: result.extractionResult.unique_hs_codes.slice(0, 50), // First 50 for preview
+        full_text_preview: result.fullText.slice(0, 2000),
+        pages_preview: result.extractionResult.page_results.slice(0, 3).map(p => ({
+          page: p.page_number,
+          text_length: p.text.length,
+          codes_found: p.hs_codes.length,
+          success: p.success,
+        })),
+      }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // Action: analyze - just detect type

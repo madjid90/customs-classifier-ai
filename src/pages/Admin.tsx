@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SmartFileUpload } from "@/components/admin/SmartFileUpload";
 import { ImportHistory } from "@/components/admin/ImportHistory";
 import { UserManagement } from "@/components/admin/UserManagement";
+import { DataSourcesManager } from "@/components/admin/DataSourcesManager";
 import { useBackgroundTaskNotifications } from "@/hooks/useBackgroundTaskNotifications";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -17,6 +18,7 @@ import {
   BookOpen,
   FileText,
   TrendingUp,
+  Globe,
 } from "lucide-react";
 
 interface DashboardStats {
@@ -110,6 +112,10 @@ export default function AdminPage() {
               <TabsTrigger value="users" className="flex items-center gap-2">
                 <Users className="h-4 w-4" />
                 Utilisateurs
+              </TabsTrigger>
+              <TabsTrigger value="sources" className="flex items-center gap-2">
+                <Globe className="h-4 w-4" />
+                Sources Web
               </TabsTrigger>
             </TabsList>
 
@@ -263,6 +269,11 @@ export default function AdminPage() {
             {/* Users Tab */}
             <TabsContent value="users">
               <UserManagement />
+            </TabsContent>
+
+            {/* Data Sources Tab */}
+            <TabsContent value="sources">
+              <DataSourcesManager />
             </TabsContent>
 
           </Tabs>

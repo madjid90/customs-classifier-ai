@@ -1,16 +1,28 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { authenticateRequest, createServiceClient } from "../_shared/auth.ts";
 import { getCorsHeaders } from "../_shared/cors.ts";
+import { 
+  extractPDFMultiPage, 
+  extractTextFromPDF,
+  validateHSCode,
+  deduplicateHSCodes,
+  type ExtractedHSCode,
+  type PDFExtractionResult,
+  type HSCodeValidation,
+} from "../_shared/pdf-ocr.ts";
 
-// Target databases and their detection patterns
+// ============================================================================
+// TARGET DATABASES AND DETECTION PATTERNS
+// ============================================================================
+
 const DATABASE_TARGETS = {
   hs_codes: {
     name: "Codes HS / Nomenclature douanière",
     patterns: [
       /tarif|nomenclature|harmonis[ée]|sh\s*\d|code.*douane/i,
       /position.*tarifaire|chapitre.*\d{2}/i,
-      /\d{4}\.\d{2}\.\d{2}/,  // Format HS code
-      /produits?\s+contr[ôo]l[ée]s|origine|certificat/i, // Controlled products
+      /\d{4}\.\d{2}\.\d{2}/,
+      /produits?\s+contr[ôo]l[ée]s|origine|certificat/i,
     ],
     contentIndicators: ["code", "libellé", "position", "sous-position", "droits", "taxes", "origine", "contrôlé"],
   },
@@ -58,6 +70,10 @@ const DATABASE_TARGETS = {
   },
 };
 
+// ============================================================================
+// TYPES
+// ============================================================================
+
 interface FileAnalysis {
   detectedType: string;
   targetDatabase: string;
@@ -66,219 +82,81 @@ interface FileAnalysis {
   extractedData?: any;
   summary: string;
   contentPreview: string;
-}
-
-// Interface for extracted HS codes with Moroccan 14-digit extension
-interface ExtractedHSCode {
-  code_10: string;
-  code_14?: string;
-  label_fr: string;
-  unit?: string;
-  droit?: number;
-  notes?: string;
-}
-
-// Validation result for HS codes
-interface HSCodeValidation {
-  isValid: boolean;
-  errors: string[];
-  warnings: string[];
-}
-
-// Validate HS code structure and logic
-function validateHSCode(code: ExtractedHSCode): HSCodeValidation {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-  
-  // Check code_10 format
-  if (!code.code_10 || !/^\d{10}$/.test(code.code_10)) {
-    errors.push(`code_10 invalide: ${code.code_10}`);
-  }
-  
-  // Check chapter (01-99)
-  const chapter = parseInt(code.code_10?.slice(0, 2) || "0", 10);
-  if (chapter < 1 || chapter > 99) {
-    errors.push(`Chapitre invalide: ${chapter}`);
-  }
-  
-  // Check subheading (position 6 digits)
-  const subheading = code.code_10?.slice(0, 6) || "";
-  if (!/^\d{6}$/.test(subheading)) {
-    errors.push(`Sous-position invalide: ${subheading}`);
-  }
-  
-  // Check code_14 if present
-  if (code.code_14 && !/^\d{14}$/.test(code.code_14)) {
-    errors.push(`code_14 invalide: ${code.code_14}`);
-  }
-  
-  // Check code_14 starts with code_10
-  if (code.code_14 && !code.code_14.startsWith(code.code_10)) {
-    warnings.push(`code_14 ne commence pas par code_10`);
-  }
-  
-  // Check label
-  if (!code.label_fr || code.label_fr.length < 3) {
-    errors.push(`Libellé trop court ou manquant`);
-  }
-  
-  if (code.label_fr && code.label_fr.length > 500) {
-    warnings.push(`Libellé très long (${code.label_fr.length} chars)`);
-  }
-  
-  // Check for suspicious patterns in label
-  if (code.label_fr && /^[\d\s\.\-]+$/.test(code.label_fr)) {
-    errors.push(`Libellé contient uniquement des chiffres`);
-  }
-  
-  // Check unit if present
-  if (code.unit && !["u", "kg", "l", "m", "m2", "m3", "p/st", "tonne", "ct", "g", "pair", "paire", "1000u", "1000 u"].includes(code.unit.toLowerCase())) {
-    warnings.push(`Unité non standard: ${code.unit}`);
-  }
-  
-  // Check duty rate
-  if (code.droit !== undefined && (code.droit < 0 || code.droit > 200)) {
-    warnings.push(`Taux de droit inhabituel: ${code.droit}%`);
-  }
-  
-  return {
-    isValid: errors.length === 0,
-    errors,
-    warnings
+  pdfExtractionStats?: {
+    total_pages: number;
+    pages_processed: number;
+    pages_failed: number;
+    codes_extracted: number;
+    extraction_quality: number;
+    processing_time_ms: number;
   };
 }
 
-// Specialized OCR prompt for Moroccan tariff documents
-const MOROCCAN_TARIFF_OCR_PROMPT = `Tu es un expert OCR spécialisé dans les tarifs douaniers marocains.
+// ============================================================================
+// PDF PROCESSING - Now uses shared pdf-ocr module
+// ============================================================================
 
-STRUCTURE DU DOCUMENT:
-Le tarif douanier marocain est structuré en TABLEAU avec ces colonnes:
-1. CODIFICATION (5 sous-colonnes):
-   - Colonne 1: Position (4 chiffres, ex: 0101)
-   - Colonne 2: Sous-position (2 chiffres, ex: 21)
-   - Colonne 3: Extension (2 chiffres, ex: 00)
-   - Colonne 4: Extension nationale (2 chiffres, ex: 10)
-   - Colonne 5: Extension marocaine (4 chiffres, ex: 0000) - OPTIONNEL
-2. DESIGNATION DES PRODUITS (libellé en français)
-3. UNITE (u, kg, l, m, m2, etc.)
-4. DROITS D'IMPORTATION (pourcentage)
-
-RÈGLES D'EXTRACTION OCR:
-1. PRÉSERVE la structure exacte du tableau
-2. CHAQUE LIGNE = une entrée de code HS
-3. Les tirets "- - -" indiquent un niveau de sous-classification
-4. "EX" devant un code = exception, garde le code sans le préfixe EX
-5. Les notes de bas de page (a), (b), etc. sont des restrictions
-
-FORMAT DE SORTIE:
-Transcris le tableau ligne par ligne au format:
-CODE | DESIGNATION | UNITE | DROIT
-
-Exemple:
-0101.21.00.00 | Chevaux reproducteurs de race pure | u | 2,5
-0101.21.00.10 | - - Chevaux arabes | u | 0
-0101.29.00.00 | Autres chevaux | u | 17,5
-
-COMMENCE L'EXTRACTION:`;
-
-// Specialized OCR prompt for multi-page processing
-const MULTI_PAGE_OCR_PROMPT = `Tu es un expert OCR spécialisé dans les tarifs douaniers.
-
-Cette page fait partie d'un document plus large. Extrait TOUT le contenu de cette page.
-
-INSTRUCTIONS:
-1. Extrait CHAQUE ligne du tableau de codes HS
-2. Préserve les codes numériques EXACTEMENT comme ils apparaissent
-3. Si un code est coupé entre pages, extrait ce qui est visible
-4. Préserve les notes de section/chapitre
-5. Format: CODE | DESIGNATION | UNITE | DROIT
-
-Important: 
-- Ne pas ignorer les lignes avec des tirets "- - -" (sous-classifications)
-- Les codes peuvent avoir 6, 8, 10 ou 14 chiffres
-- Extraire aussi les notes de restrictions
-
-Début de l'extraction:`;
-
-// Extract text from PDF with multi-page support
-async function extractTextFromPDFMultiPage(base64Content: string, filename: string): Promise<{ pages: string[]; fullText: string }> {
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+// Fallback text extraction when no PDF OCR result available
+async function extractHSCodesFromTextContent(content: string, _filename: string): Promise<ExtractedHSCode[]> {
+  const codes: ExtractedHSCode[] = [];
+  const hsCodePattern = /(\d{4}[\.\s]?\d{2}[\.\s]?\d{2}[\.\s]?\d{2}[\.\s]?\d{0,4})\s*[|\-:]\s*([^|\n]{10,200})/g;
   
-  if (!LOVABLE_API_KEY) {
-    console.log("[analyze-file] No LOVABLE_API_KEY, cannot process PDF");
-    return { pages: [], fullText: `[PDF non traité: ${filename}]` };
-  }
-
-  try {
-    console.log(`[analyze-file] Extracting text from PDF with multi-page support: ${filename}`);
-    
-    // For now, process the entire PDF as one unit
-    // Use specialized tariff prompt
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: MOROCCAN_TARIFF_OCR_PROMPT
-              },
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:application/pdf;base64,${base64Content}`
-                }
-              }
-            ]
-          }
-        ],
-        max_tokens: 32000, // Increased for larger documents
-        temperature: 0.1,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("[analyze-file] Lovable AI error:", response.status, errorText);
-      if (response.status === 429) {
-        throw new Error("Rate limit exceeded - please try again later");
+  let match;
+  while ((match = hsCodePattern.exec(content)) !== null) {
+    const cleanCode = match[1].replace(/\D/g, '');
+    if (cleanCode.length >= 6) {
+      const code_10 = cleanCode.padEnd(10, '0').slice(0, 10);
+      const chapter = parseInt(code_10.slice(0, 2), 10);
+      
+      if (chapter >= 1 && chapter <= 99) {
+        const hsCode: ExtractedHSCode = {
+          code_10,
+          code_14: cleanCode.length >= 14 ? cleanCode.slice(0, 14) : undefined,
+          label_fr: match[2].trim(),
+        };
+        
+        const validation = validateHSCode(hsCode);
+        if (validation.isValid) {
+          codes.push(hsCode);
+        }
       }
-      if (response.status === 402) {
-        throw new Error("Payment required - please add credits to your workspace");
-      }
-      throw new Error(`Lovable AI error: ${response.status}`);
     }
-
-    const data = await response.json();
-    const extractedText = data.choices?.[0]?.message?.content || "";
-    
-    console.log(`[analyze-file] Extracted ${extractedText.length} chars from PDF (multi-page)`);
-    
-    // Split by page markers if present
-    const pageMarkers = extractedText.split(/(?:---\s*Page\s*\d+\s*---|===\s*Page\s*\d+\s*===|\[Page\s*\d+\])/i);
-    const pages = pageMarkers.length > 1 ? pageMarkers.filter((p: string) => p.trim().length > 0) : [extractedText];
-    
-    return {
-      pages,
-      fullText: extractedText
-    };
-  } catch (e) {
-    console.error("[analyze-file] PDF extraction error:", e);
-    return { pages: [], fullText: `[Erreur extraction PDF: ${filename}]` };
   }
+  
+  return deduplicateHSCodes(codes);
 }
 
-// Legacy single extraction function (kept for compatibility)
-async function extractTextFromPDF(base64Content: string, filename: string): Promise<string> {
-  const result = await extractTextFromPDFMultiPage(base64Content, filename);
-  return result.fullText;
+// Store last PDF extraction result for use in processAndStore
+let lastPDFExtractionResult: PDFExtractionResult | null = null;
+
+async function processPDFWithMultiPageOCR(
+  base64Content: string, 
+  filename: string
+): Promise<{ pages: string[]; fullText: string; extractionResult: PDFExtractionResult }> {
+  console.log(`[analyze-file] Starting multi-page PDF extraction: ${filename}`);
+  
+  const extractionResult = await extractPDFMultiPage(base64Content, filename);
+  
+  // Store for later use in processAndStore
+  lastPDFExtractionResult = extractionResult;
+  
+  // Log extraction stats
+  console.log(`[analyze-file] PDF extraction complete:`);
+  console.log(`  - Pages: ${extractionResult.pages_processed}/${extractionResult.total_pages}`);
+  console.log(`  - HS codes: ${extractionResult.unique_hs_codes.length} unique (${extractionResult.all_hs_codes.length} total)`);
+  console.log(`  - Quality: ${extractionResult.extraction_quality.estimated_accuracy * 100}%`);
+  console.log(`  - Time: ${extractionResult.processing_time_ms}ms`);
+  
+  // Split text by page markers
+  const pages = extractionResult.page_results
+    .filter(p => p.success)
+    .map(p => p.text);
+  
+  return {
+    pages,
+    fullText: extractionResult.full_text,
+    extractionResult,
+  };
 }
 
 // Extract HS codes from a single page/chunk with retry logic
@@ -398,8 +276,8 @@ IMPORTANT: Ne rate AUCUN code. Mieux vaut extraire un code douteux que de le man
           }
         ],
         tool_choice: { type: "function", function: { name: "extract_hs_codes" } },
-        max_tokens: 32000, // Increased
-        temperature: 0.05, // Lower for more consistency
+        max_tokens: 32000,
+        temperature: 0.05,
       }),
     });
 
@@ -715,7 +593,8 @@ async function processAndStore(
   analysis: FileAnalysis,
   content: string,
   filename: string,
-  _userId: string
+  _userId: string,
+  pdfExtractionResult?: PDFExtractionResult
 ): Promise<{ success: boolean; recordsCreated: number; error?: string; validationStats?: any }> {
   const versionLabel = new Date().toISOString().split("T")[0];
   let recordsCreated = 0;
@@ -744,10 +623,23 @@ async function processAndStore(
         recordsCreated = chunks.length;
       }
     }
-    // For HS codes (requires specific format)
+    // For HS codes - use pre-extracted codes from PDF if available
     else if (analysis.targetDatabase === "hs_codes") {
-      // Use AI to extract HS codes from the document
-      const extractedCodes = await extractHSCodesWithAI(content, filename);
+      let extractedCodes: ExtractedHSCode[] = [];
+      
+      // Use pre-extracted codes from PDF multi-page OCR if available
+      if (pdfExtractionResult && pdfExtractionResult.unique_hs_codes.length > 0) {
+        extractedCodes = pdfExtractionResult.unique_hs_codes;
+        console.log(`[analyze-file] Using ${extractedCodes.length} pre-extracted HS codes from PDF OCR`);
+        
+        // Log extraction quality
+        const quality = pdfExtractionResult.extraction_quality;
+        console.log(`[analyze-file] Extraction quality: ${quality.estimated_accuracy * 100}%, ${quality.codes_per_page} codes/page`);
+      } else {
+        // Fallback: extract from text content
+        console.log(`[analyze-file] No pre-extracted codes, falling back to text extraction`);
+        extractedCodes = await extractHSCodesFromTextContent(content, filename);
+      }
       
       if (extractedCodes.length > 0) {
         // Build records for insertion
@@ -772,7 +664,7 @@ async function processAndStore(
         recordsCreated = records.length;
         validationStats.valid = records.length;
         
-        console.log(`[analyze-file] Stored ${recordsCreated} HS codes with enhanced extraction`);
+        console.log(`[analyze-file] Stored ${recordsCreated} HS codes with enhanced multi-page extraction`);
       } else {
         // Fallback: try regex patterns for HS codes
         const hsCodePattern = /\b(\d{6,14})\b/g;
@@ -946,16 +838,19 @@ serve(async (req) => {
 
     // Check if content is base64-encoded PDF
     let processedContent = content || "";
+    let pdfExtractionResult: PDFExtractionResult | null = null;
+    
     if (processedContent.startsWith("[BASE64_FILE:")) {
       const typeMatch = processedContent.match(/\[BASE64_FILE:([^\]]+)\]/);
       const fileType = typeMatch?.[1] || "";
       const base64Data = processedContent.replace(/\[BASE64_FILE:[^\]]+\]/, "");
       
       if (fileType.includes("pdf") || filename?.toLowerCase().endsWith(".pdf")) {
-        console.log(`[analyze-file] Processing PDF: ${filename}`);
-        const result = await extractTextFromPDFMultiPage(base64Data, filename || "document.pdf");
+        console.log(`[analyze-file] Processing PDF with multi-page OCR: ${filename}`);
+        const result = await processPDFWithMultiPageOCR(base64Data, filename || "document.pdf");
         processedContent = result.fullText;
-        console.log(`[analyze-file] PDF extracted with multi-page, got ${processedContent.length} chars from ${result.pages.length} page(s)`);
+        pdfExtractionResult = result.extractionResult;
+        console.log(`[analyze-file] PDF extracted: ${processedContent.length} chars, ${result.extractionResult.unique_hs_codes.length} HS codes, ${result.pages.length} page(s)`);
       } else {
         // For other binary files, try to decode base64 as text
         try {
@@ -969,6 +864,18 @@ serve(async (req) => {
     // Action: analyze - just detect type
     if (action === "analyze") {
       const analysis = await analyzeWithAI(processedContent, filename || "document");
+      
+      // Add PDF extraction stats if available
+      if (pdfExtractionResult) {
+        analysis.pdfExtractionStats = {
+          total_pages: pdfExtractionResult.total_pages,
+          pages_processed: pdfExtractionResult.pages_processed,
+          pages_failed: pdfExtractionResult.pages_failed,
+          codes_extracted: pdfExtractionResult.unique_hs_codes.length,
+          extraction_quality: pdfExtractionResult.extraction_quality.estimated_accuracy,
+          processing_time_ms: pdfExtractionResult.processing_time_ms,
+        };
+      }
       
       return new Response(JSON.stringify(analysis), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -984,7 +891,27 @@ serve(async (req) => {
         analysis.confidence = 1;
       }
       
-      const result = await processAndStore(supabase, analysis, processedContent, filename || "document", user.id);
+      // Pass PDF extraction result for optimized HS code storage
+      const result = await processAndStore(
+        supabase, 
+        analysis, 
+        processedContent, 
+        filename || "document", 
+        user.id,
+        pdfExtractionResult || undefined
+      );
+      
+      // Add PDF stats to response
+      if (pdfExtractionResult) {
+        analysis.pdfExtractionStats = {
+          total_pages: pdfExtractionResult.total_pages,
+          pages_processed: pdfExtractionResult.pages_processed,
+          pages_failed: pdfExtractionResult.pages_failed,
+          codes_extracted: pdfExtractionResult.unique_hs_codes.length,
+          extraction_quality: pdfExtractionResult.extraction_quality.estimated_accuracy,
+          processing_time_ms: pdfExtractionResult.processing_time_ms,
+        };
+      }
       
       return new Response(JSON.stringify({
         ...analysis,

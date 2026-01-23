@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
+import { createBackgroundTask, completeTask, failTask, updateTaskProgress } from "../_shared/background-tasks.ts";
 
 const FIRECRAWL_API_KEY = Deno.env.get("FIRECRAWL_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -135,6 +136,29 @@ Deno.serve(async (req) => {
 
       console.log(`[scrape-source] Completed: ${result.pagesScraped} pages, ${result.chunksCreated} chunks, ${result.filesDownloaded} files`);
 
+      // Trigger automatic embedding generation for new chunks
+      let embeddingsTriggered = false;
+      if (result.chunksCreated > 0) {
+        try {
+          // Use EdgeRuntime.waitUntil for background processing
+          const embeddingPromise = triggerEmbeddingGeneration(supabase, result.chunksCreated);
+          
+          // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
+          if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+            // @ts-ignore
+            EdgeRuntime.waitUntil(embeddingPromise);
+            embeddingsTriggered = true;
+            console.log(`[scrape-source] Embedding generation triggered in background for ${result.chunksCreated} chunks`);
+          } else {
+            // Fallback: fire and forget
+            embeddingPromise.catch(err => console.error("[scrape-source] Embedding trigger error:", err));
+            embeddingsTriggered = true;
+          }
+        } catch (err) {
+          console.error("[scrape-source] Failed to trigger embeddings:", err);
+        }
+      }
+
       return new Response(
         JSON.stringify({
           success: true,
@@ -142,6 +166,7 @@ Deno.serve(async (req) => {
           chunks_created: result.chunksCreated,
           files_downloaded: result.filesDownloaded,
           errors: result.errors.length,
+          embeddings_triggered: embeddingsTriggered,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -587,4 +612,138 @@ function splitIntoChunks(text: string, maxLength: number): string[] {
   }
 
   return chunks;
+}
+
+// ============================================================================
+// AUTOMATIC EMBEDDING GENERATION
+// ============================================================================
+
+const EMBEDDING_MODEL = "text-embedding-3-large";
+const EMBEDDING_DIMENSIONS = 1536;
+const MAX_TEXT_LENGTH = 8000;
+const RATE_LIMIT_DELAY_MS = 150;
+
+async function generateEmbedding(text: string, apiKey: string): Promise<number[]> {
+  const cleanText = text
+    .replace(/\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .substring(0, MAX_TEXT_LENGTH);
+
+  if (cleanText.length < 10) {
+    throw new Error("Text too short for embedding");
+  }
+
+  const response = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: EMBEDDING_MODEL,
+      input: cleanText,
+      dimensions: EMBEDDING_DIMENSIONS,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    if (response.status === 429) {
+      throw new Error("RATE_LIMIT");
+    }
+    throw new Error(`OpenAI error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.data[0].embedding;
+}
+
+async function triggerEmbeddingGeneration(supabase: any, expectedChunks: number): Promise<void> {
+  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+  
+  if (!OPENAI_API_KEY) {
+    console.log("[scrape-source] Skipping embeddings: OPENAI_API_KEY not configured");
+    return;
+  }
+
+  // Wait a bit for chunks to be fully committed
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Get chunks without embeddings (limit to recent ones)
+  const { data: chunks, error } = await supabase
+    .from("kb_chunks")
+    .select("id, ref, text, metadata")
+    .is("embedding", null)
+    .order("created_at", { ascending: false })
+    .limit(Math.min(expectedChunks + 10, 100));
+
+  if (error || !chunks || chunks.length === 0) {
+    console.log("[scrape-source] No chunks without embeddings found");
+    return;
+  }
+
+  console.log(`[scrape-source] Generating embeddings for ${chunks.length} chunks...`);
+
+  // Create background task for tracking
+  const taskId = await createBackgroundTask(supabase, "embeddings_kb", {
+    itemsTotal: chunks.length,
+  });
+
+  let processed = 0;
+  let errors = 0;
+
+  for (const chunk of chunks) {
+    try {
+      // Build text for embedding
+      let text = chunk.ref || "";
+      if (chunk.text) text += " " + chunk.text;
+      if (chunk.metadata?.summary) text += " " + chunk.metadata.summary;
+      text = text.trim();
+
+      if (text.length < 20) {
+        continue;
+      }
+
+      const embedding = await generateEmbedding(text, OPENAI_API_KEY);
+      const embeddingString = `[${embedding.join(",")}]`;
+
+      const { error: updateError } = await supabase
+        .from("kb_chunks")
+        .update({ embedding: embeddingString })
+        .eq("id", chunk.id);
+
+      if (!updateError) {
+        processed++;
+        if (taskId && processed % 10 === 0) {
+          await updateTaskProgress(supabase, taskId, processed, chunks.length);
+        }
+      } else {
+        errors++;
+      }
+
+      // Rate limiting
+      await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));
+    } catch (err) {
+      errors++;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[scrape-source] Embedding error for chunk ${chunk.id}:`, msg);
+      
+      // If rate limited, wait longer
+      if (msg === "RATE_LIMIT") {
+        await new Promise(r => setTimeout(r, 5000));
+      }
+    }
+  }
+
+  // Complete task
+  if (taskId) {
+    if (processed === 0 && errors > 0) {
+      await failTask(supabase, taskId, `Failed to generate embeddings: ${errors} errors`);
+    } else {
+      await completeTask(supabase, taskId, processed, chunks.length);
+    }
+  }
+
+  console.log(`[scrape-source] Embeddings complete: ${processed}/${chunks.length} processed, ${errors} errors`);
 }

@@ -794,3 +794,235 @@ export async function extractTextFromPDF(
   const result = await extractPDFMultiPage(base64Content, filename);
   return result.full_text;
 }
+
+// ============================================================================
+// PAGE IMAGES VISION OCR (for client-side converted PDFs)
+// ============================================================================
+
+export interface PageImageInput {
+  pageNumber: number;
+  base64: string; // PNG base64
+  width?: number;
+  height?: number;
+}
+
+/**
+ * Process pre-converted page images (PNG) with vision OCR
+ * This is used when the client has already converted PDF to images
+ */
+export async function processPageImagesWithVisionOCR(
+  pageImages: PageImageInput[],
+  filename: string
+): Promise<PDFExtractionResult> {
+  const startTime = Date.now();
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  
+  if (!LOVABLE_API_KEY) {
+    console.log("[pdf-ocr] No LOVABLE_API_KEY, cannot process page images");
+    return {
+      total_pages: pageImages.length,
+      pages_processed: 0,
+      pages_failed: pageImages.length,
+      full_text: `[Pages non traitées: ${filename}]`,
+      all_hs_codes: [],
+      unique_hs_codes: [],
+      page_results: [],
+      processing_time_ms: Date.now() - startTime,
+      extraction_quality: {
+        estimated_accuracy: 0,
+        codes_per_page: 0,
+        coverage_percent: 0,
+      },
+    };
+  }
+
+  console.log(`[pdf-ocr] Processing ${pageImages.length} page images with vision OCR: ${filename}`);
+
+  const pageResults: PageExtractionResult[] = [];
+
+  // Process pages in parallel batches
+  for (let i = 0; i < pageImages.length; i += CONFIG.MAX_CONCURRENT_PAGES) {
+    const batch = pageImages.slice(i, i + CONFIG.MAX_CONCURRENT_PAGES);
+    
+    console.log(`[pdf-ocr] Processing batch ${Math.floor(i / CONFIG.MAX_CONCURRENT_PAGES) + 1}, pages ${i + 1}-${Math.min(i + CONFIG.MAX_CONCURRENT_PAGES, pageImages.length)}`);
+    
+    const batchResults = await Promise.all(
+      batch.map(async (pageImage) => {
+        const pageStartTime = Date.now();
+        
+        try {
+          const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: CONFIG.MODEL,
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: `${MOROCCAN_TARIFF_PAGE_PROMPT}\n\n[PAGE ${pageImage.pageNumber}/${pageImages.length}]`
+                    },
+                    {
+                      type: "image_url",
+                      image_url: {
+                        url: `data:image/png;base64,${pageImage.base64}`,
+                        detail: "high"
+                      }
+                    }
+                  ]
+                }
+              ],
+              max_tokens: CONFIG.MAX_TOKENS,
+              temperature: CONFIG.TEMPERATURE,
+            }),
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`[pdf-ocr] Page ${pageImage.pageNumber} error:`, response.status, errorText.slice(0, 200));
+            
+            return {
+              page_number: pageImage.pageNumber,
+              success: false,
+              text: "",
+              hs_codes: [],
+              error: `API error: ${response.status}`,
+              processing_time_ms: Date.now() - pageStartTime,
+            } as PageExtractionResult;
+          }
+
+          const data = await response.json();
+          const extractedText = data.choices?.[0]?.message?.content || "";
+          
+          console.log(`[pdf-ocr] Page ${pageImage.pageNumber}: extracted ${extractedText.length} chars`);
+          
+          return {
+            page_number: pageImage.pageNumber,
+            success: true,
+            text: extractedText,
+            hs_codes: [],
+            processing_time_ms: Date.now() - pageStartTime,
+          } as PageExtractionResult;
+          
+        } catch (error) {
+          console.error(`[pdf-ocr] Page ${pageImage.pageNumber} failed:`, error);
+          return {
+            page_number: pageImage.pageNumber,
+            success: false,
+            text: "",
+            hs_codes: [],
+            error: error instanceof Error ? error.message : "Unknown error",
+            processing_time_ms: Date.now() - pageStartTime,
+          } as PageExtractionResult;
+        }
+      })
+    );
+    
+    pageResults.push(...batchResults);
+    
+    // Delay between batches
+    if (i + CONFIG.MAX_CONCURRENT_PAGES < pageImages.length) {
+      await new Promise(resolve => setTimeout(resolve, CONFIG.DELAY_BETWEEN_BATCHES_MS));
+    }
+  }
+
+  // Aggregate text from all pages
+  const successfulPages = pageResults.filter(p => p.success);
+  const failedPages = pageResults.filter(p => !p.success);
+  
+  const fullText = successfulPages
+    .sort((a, b) => a.page_number - b.page_number)
+    .map(p => `--- Page ${p.page_number} ---\n${p.text}`)
+    .join("\n\n");
+
+  console.log(`[pdf-ocr] Vision OCR complete: ${successfulPages.length}/${pageResults.length} pages, ${fullText.length} chars total`);
+
+  // Extract HS codes from aggregated text
+  console.log(`[pdf-ocr] Starting HS code extraction from vision OCR text...`);
+  
+  const CHUNK_SIZE = 35000;
+  const OVERLAP = 2000;
+  const textChunks: string[] = [];
+  
+  if (fullText.length <= CHUNK_SIZE) {
+    textChunks.push(fullText);
+  } else {
+    let start = 0;
+    while (start < fullText.length) {
+      let end = Math.min(start + CHUNK_SIZE, fullText.length);
+      
+      if (end < fullText.length) {
+        const lastNewline = fullText.lastIndexOf('\n', end);
+        const lastPipe = fullText.lastIndexOf('|', end);
+        const breakPoint = Math.max(lastNewline, lastPipe);
+        
+        if (breakPoint > start + CHUNK_SIZE / 2) {
+          end = breakPoint + 1;
+        }
+      }
+      
+      textChunks.push(fullText.slice(start, end));
+      start = end - OVERLAP;
+    }
+  }
+
+  console.log(`[pdf-ocr] Extracting HS codes from ${textChunks.length} text chunk(s)`);
+
+  const allHSCodes: ExtractedHSCode[] = [];
+  
+  for (let i = 0; i < textChunks.length; i += CONFIG.MAX_CONCURRENT_PAGES) {
+    const batch = textChunks.slice(i, i + CONFIG.MAX_CONCURRENT_PAGES);
+    
+    const batchResults = await Promise.all(
+      batch.map((chunk, idx) => extractHSCodesFromText(chunk, i + idx + 1))
+    );
+    
+    for (const codes of batchResults) {
+      allHSCodes.push(...codes);
+    }
+    
+    if (i + CONFIG.MAX_CONCURRENT_PAGES < textChunks.length) {
+      await new Promise(resolve => setTimeout(resolve, CONFIG.DELAY_BETWEEN_BATCHES_MS));
+    }
+  }
+
+  // Deduplicate codes
+  const uniqueCodes = deduplicateHSCodes(allHSCodes);
+  
+  console.log(`[pdf-ocr] Vision extraction complete: ${allHSCodes.length} total codes, ${uniqueCodes.length} unique`);
+
+  // Calculate quality metrics
+  const processingTime = Date.now() - startTime;
+  const codesPerPage = successfulPages.length > 0 ? uniqueCodes.length / successfulPages.length : 0;
+  const coveragePercent = pageResults.length > 0 ? (successfulPages.length / pageResults.length) * 100 : 0;
+  
+  let estimatedAccuracy = 0.75; // Higher base accuracy for vision OCR
+  
+  if (successfulPages.length === pageResults.length) estimatedAccuracy += 0.1;
+  if (uniqueCodes.length > 0) estimatedAccuracy += 0.08;
+  if (codesPerPage > 5) estimatedAccuracy += 0.05;
+  if (failedPages.length === 0) estimatedAccuracy += 0.02;
+  
+  estimatedAccuracy = Math.min(estimatedAccuracy, 0.98);
+
+  return {
+    total_pages: pageImages.length,
+    pages_processed: successfulPages.length,
+    pages_failed: failedPages.length,
+    full_text: fullText,
+    all_hs_codes: allHSCodes,
+    unique_hs_codes: uniqueCodes,
+    page_results: pageResults,
+    processing_time_ms: processingTime,
+    extraction_quality: {
+      estimated_accuracy: Math.round(estimatedAccuracy * 100) / 100,
+      codes_per_page: Math.round(codesPerPage * 10) / 10,
+      coverage_percent: Math.round(coveragePercent),
+    },
+  };
+}

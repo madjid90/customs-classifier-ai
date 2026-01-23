@@ -17,11 +17,13 @@ import {
   FileImage,
   FileSpreadsheet,
   File,
-  Database
+  Database,
+  ImageIcon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { convertPDFToImages, isPDF, type PDFConversionProgress, type PageImage } from "@/lib/pdf-to-images";
 
 interface DetectedFile {
   id: string;
@@ -29,10 +31,14 @@ interface DetectedFile {
   detectedType: string | null;
   targetDatabase: string | null;
   confidence: number;
-  status: "pending" | "detecting" | "ready" | "uploading" | "processing" | "done" | "error";
+  status: "pending" | "detecting" | "converting" | "ready" | "uploading" | "processing" | "done" | "error";
   error?: string;
   progress: number;
   recordsCreated?: number;
+  // PDF conversion data
+  isPdf?: boolean;
+  pdfPages?: PageImage[];
+  pdfConversionStatus?: string;
 }
 
 const DATABASE_LABELS: Record<string, string> = {
@@ -171,6 +177,47 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
     });
   };
 
+  // Convert PDF to images for vision-based OCR
+  const convertPDFForVision = async (
+    fileItem: DetectedFile
+  ): Promise<PageImage[]> => {
+    return new Promise(async (resolve) => {
+      try {
+        const result = await convertPDFToImages(fileItem.file, {
+          maxPages: 50,
+          scale: 2.0, // High quality for OCR
+          onProgress: (progress: PDFConversionProgress) => {
+            setFiles((prev) =>
+              prev.map((f) =>
+                f.id === fileItem.id
+                  ? {
+                      ...f,
+                      pdfConversionStatus: progress.status === 'rendering' 
+                        ? `Conversion page ${progress.currentPage}/${progress.totalPages}`
+                        : progress.status === 'loading' 
+                        ? 'Chargement PDF...'
+                        : progress.status,
+                      progress: Math.round((progress.currentPage / Math.max(progress.totalPages, 1)) * 30),
+                    }
+                  : f
+              )
+            );
+          },
+        });
+
+        if (result.errors.length > 0) {
+          console.warn('[SmartFileUpload] PDF conversion warnings:', result.errors);
+        }
+
+        console.log(`[SmartFileUpload] PDF converted: ${result.pages.length} pages in ${result.conversionTimeMs}ms`);
+        resolve(result.pages);
+      } catch (error) {
+        console.error('[SmartFileUpload] PDF conversion failed:', error);
+        resolve([]);
+      }
+    });
+  };
+
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const newFiles: DetectedFile[] = acceptedFiles.map((file) => ({
       id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -180,13 +227,52 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
       confidence: 0,
       status: "detecting" as const,
       progress: 0,
+      isPdf: isPDF(file),
     }));
 
     setFiles((prev) => [...prev, ...newFiles]);
 
-    // Analyze each file with AI
+    // Analyze each file with AI, and convert PDFs to images
     for (const fileItem of newFiles) {
       try {
+        // If it's a PDF, convert to images first for vision OCR
+        let pdfPages: PageImage[] | undefined;
+        
+        if (fileItem.isPdf) {
+          setFiles((prev) =>
+            prev.map((f) =>
+              f.id === fileItem.id
+                ? { ...f, status: "converting", pdfConversionStatus: "Conversion PDF → Images..." }
+                : f
+            )
+          );
+          
+          pdfPages = await convertPDFForVision(fileItem);
+          
+          if (pdfPages.length > 0) {
+            toast({
+              title: "PDF converti",
+              description: `${pdfPages.length} page(s) prête(s) pour OCR vision`,
+            });
+          }
+        }
+
+        // Update with PDF pages
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === fileItem.id
+              ? { ...f, pdfPages, pdfConversionStatus: pdfPages?.length ? `${pdfPages.length} pages` : undefined }
+              : f
+          )
+        );
+
+        // Now analyze content
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === fileItem.id ? { ...f, status: "detecting" } : f
+          )
+        );
+
         const analysis = await analyzeFileWithAI(fileItem.file);
         
         setFiles((prev) =>
@@ -197,7 +283,8 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
                   detectedType: analysis.type, 
                   targetDatabase: analysis.database,
                   confidence: analysis.confidence, 
-                  status: "ready" 
+                  status: "ready",
+                  pdfPages,
                 }
               : f
           )
@@ -213,13 +300,13 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
                   targetDatabase: fallback.database,
                   confidence: fallback.confidence,
                   status: "ready" 
-                } 
+                }
               : f
           )
         );
       }
     }
-  }, []);
+  }, [toast]);
 
   const removeFile = (id: string) => {
     setFiles((prev) => prev.filter((f) => f.id !== id));
@@ -258,8 +345,36 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
         return;
       }
 
-      // Read file content
-      const content = await readFileContent(fileItem.file);
+      // Prepare content - use PDF page images if available for vision OCR
+      let requestBody: any;
+      
+      if (fileItem.isPdf && fileItem.pdfPages && fileItem.pdfPages.length > 0) {
+        // Send PDF pages as images for vision-based OCR
+        console.log(`[SmartFileUpload] Sending ${fileItem.pdfPages.length} page images for vision OCR`);
+        
+        requestBody = {
+          action: "process",
+          filename: fileItem.file.name,
+          targetDatabase: fileItem.targetDatabase,
+          // Send page images for vision processing
+          pageImages: fileItem.pdfPages.map(p => ({
+            pageNumber: p.pageNumber,
+            base64: p.base64,
+            width: p.width,
+            height: p.height,
+          })),
+          useVisionOCR: true,
+        };
+      } else {
+        // Regular file content
+        const content = await readFileContent(fileItem.file);
+        requestBody = {
+          action: "process",
+          content: content,
+          filename: fileItem.file.name,
+          targetDatabase: fileItem.targetDatabase,
+        };
+      }
 
       setFiles((prev) =>
         prev.map((f) => (f.id === fileItem.id ? { ...f, progress: 40, status: "processing" } : f))
@@ -274,12 +389,7 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
             "Content-Type": "application/json",
             ...headers,
           },
-          body: JSON.stringify({
-            action: "process",
-            content: content,
-            filename: fileItem.file.name,
-            targetDatabase: fileItem.targetDatabase,
-          }),
+          body: JSON.stringify(requestBody),
         }
       );
 
@@ -397,6 +507,9 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
                   key={file.id}
                   className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3"
                 >
+                  {file.status === "converting" && (
+                    <ImageIcon className="h-5 w-5 animate-pulse text-primary" />
+                  )}
                   {file.status === "detecting" && (
                     <Loader2 className="h-5 w-5 animate-spin text-primary" />
                   )}
@@ -410,7 +523,7 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
                     <Loader2 className="h-5 w-5 animate-spin text-accent" />
                   )}
                   {file.status === "done" && (
-                    <CheckCircle2 className="h-5 w-5 text-green-500" />
+                    <CheckCircle2 className="h-5 w-5 text-[hsl(var(--chart-2))]" />
                   )}
                   {file.status === "error" && (
                     <AlertCircle className="h-5 w-5 text-destructive" />
@@ -425,6 +538,13 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
                       </span>
                     </div>
                     
+                    {file.status === "converting" && (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1">
+                        <ImageIcon className="h-3 w-3" />
+                        {file.pdfConversionStatus || "Conversion PDF → PNG..."}
+                      </p>
+                    )}
+
                     {file.status === "detecting" && (
                       <p className="text-xs text-muted-foreground flex items-center gap-1">
                         <Sparkles className="h-3 w-3" />
@@ -438,6 +558,12 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
                           <Database className="h-3 w-3" />
                           {DATABASE_LABELS[file.targetDatabase] || file.targetDatabase}
                         </Badge>
+                        {file.isPdf && file.pdfPages && file.pdfPages.length > 0 && (
+                          <Badge variant="outline" className="text-xs flex items-center gap-1">
+                            <ImageIcon className="h-3 w-3" />
+                            {file.pdfPages.length} pages OCR
+                          </Badge>
+                        )}
                         {file.confidence < 1 && (
                           <span className="text-xs text-muted-foreground">
                             ({Math.round(file.confidence * 100)}% confiance)
@@ -462,7 +588,7 @@ export function SmartFileUpload({ onUploadComplete }: { onUploadComplete?: () =>
                     )}
 
                     {file.status === "done" && (
-                      <p className="text-xs text-green-600 mt-1">
+                      <p className="text-xs text-[hsl(var(--chart-2))] mt-1">
                         ✓ {file.recordsCreated} enregistrement(s) créé(s)
                       </p>
                     )}
